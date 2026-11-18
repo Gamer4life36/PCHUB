@@ -1,9 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Windows;
 using System.Windows.Input;
-using System.Windows.Threading;
+using Avalonia.Threading;
 using PcHub.Controls;
+using PcHub.Platform;
 using PcHub.Services;
 
 namespace PcHub.ViewModels;
@@ -11,7 +11,7 @@ namespace PcHub.ViewModels;
 public sealed class MainViewModel : ObservableObject
 {
     private const int HistorySeconds = 120;
-    private readonly GpuContext _gpu;
+    private readonly IGpuMonitor _gpu;
     private readonly MonitorService _monitor;
     private readonly AppSettings _settings;
     private readonly Dispatcher _ui;
@@ -32,7 +32,7 @@ public sealed class MainViewModel : ObservableObject
     private bool _addHidden;
     private string? _addError;
 
-    public MainViewModel(GpuContext gpu, MonitorService monitor, ActivityLog log, AppSettings settings, Dispatcher ui)
+    public MainViewModel(IGpuMonitor gpu, MonitorService monitor, ActivityLog log, AppSettings settings, Dispatcher ui)
     {
         _gpu = gpu;
         _monitor = monitor;
@@ -51,7 +51,7 @@ public sealed class MainViewModel : ObservableObject
         OpenFolderCommand = new RelayCommand(p => { if (p is ToolViewModel t) OpenToolFolder(t); });
         RemoveToolCommand = new RelayCommand(p => { if (p is ToolViewModel t) AskRemove(t); });
         RescanCommand = new RelayCommand(() => _ = RescanAsync());
-        EditToolsCommand = new RelayCommand(() => ShellOpen("notepad.exe", $"\"{AppPaths.ToolsFile}\""));
+        EditToolsCommand = new RelayCommand(() => OpenText(AppPaths.ToolsFile));
         ReloadToolsCommand = new RelayCommand(ReloadTools);
         OpenDataCommand = new RelayCommand(() => ShellOpen(AppPaths.Data));
         AddAppCommand = new RelayCommand(OpenAddDialog);
@@ -59,12 +59,13 @@ public sealed class MainViewModel : ObservableObject
         SaveAddCommand = new RelayCommand(SaveAdd);
         CancelAddCommand = new RelayCommand(() => AddOpen = false);
 
-        if (!gpu.HasNvml)
+        if (!gpu.HasSensors)
         {
+            string why = Os.Current.IsMac ? "not shared by macOS" : "needs an NVIDIA card";
             _temp = "n/a";
-            _tempSub = "needs an NVIDIA card";
+            _tempSub = why;
             _power = "n/a";
-            _powerSub = "needs an NVIDIA card";
+            _powerSub = why;
         }
 
         SetUpDrives();
@@ -85,7 +86,7 @@ public sealed class MainViewModel : ObservableObject
     {
         OptimizeDrivesCommand = new RelayCommand(() =>
         {
-            try { DriveService.OpenOptimizeDrives(); }
+            try { Os.Current.OpenDriveTool(); }
             catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
             {
                 Log.Error("Drives", "Couldn't open Optimize Drives: " + ex.Message);
@@ -93,7 +94,7 @@ public sealed class MainViewModel : ObservableObject
         });
         RefreshDrivesCommand = new RelayCommand(() => _ = RefreshDrivesAsync());
         OptimizeDriveCommand = new RelayCommand(p => { if (p is DriveViewModel { CanOptimize: true } d) AskOptimize(d); });
-        _driveTimer = new DispatcherTimer(TimeSpan.FromSeconds(60), DispatcherPriority.Background, (_, _) => _ = RefreshDrivesAsync(), _ui);
+        _driveTimer = new DispatcherTimer(TimeSpan.FromSeconds(60), DispatcherPriority.Background, (_, _) => _ = RefreshDrivesAsync());
         _driveTimer.Start();
     }
 
@@ -116,7 +117,7 @@ public sealed class MainViewModel : ObservableObject
         System.Diagnostics.Process? proc;
         try
         {
-            proc = OptimizeRunner.Start(d.Letter);
+            proc = Os.Current.StartOptimize(d.Letter);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or ArgumentException)
         {
@@ -141,7 +142,7 @@ public sealed class MainViewModel : ObservableObject
                 while (!HasExited(proc))
                 {
                     await Task.Delay(400);
-                    if (OptimizeRunner.ReadProgress(d.Letter) is var (stage, pct))
+                    if (Os.Current.ReadOptimizeProgress(d.Letter) is var (stage, pct))
                     {
                         d.StageText = $"{stage} {pct}%";
                         d.Progress = pct / 100.0;
@@ -149,7 +150,7 @@ public sealed class MainViewModel : ObservableObject
                 }
             }
 
-            var final = OptimizeRunner.ReadProgress(d.Letter);
+            var final = Os.Current.ReadOptimizeProgress(d.Letter);
             await RefreshDrivesAsync();
             if (final is (_, 100))
             {
@@ -158,7 +159,7 @@ public sealed class MainViewModel : ObservableObject
             }
             else
             {
-                string last = OptimizeRunner.LastLine(d.Letter);
+                string last = Os.Current.OptimizeLastLine(d.Letter);
                 Log.Warn("Drives", $"Optimizing {d.Letter} ended early." + (last.Length > 0 ? " " + last : ""));
             }
         }
@@ -206,7 +207,7 @@ public sealed class MainViewModel : ObservableObject
         _drivesBusy = true;
         try
         {
-            var list = await Task.Run(DriveService.Read);
+            var list = await Task.Run(Os.Current.ReadDrives);
             var byLetter = Drives.ToDictionary(d => d.Letter);
             for (int i = 0; i < list.Count; i++)
             {
@@ -304,7 +305,7 @@ public sealed class MainViewModel : ObservableObject
         OpenInAppCommand = new RelayCommand(p => { if (p is ToolViewModel t) OpenToolInApp(t); });
         ShowDashboardCommand = new RelayCommand(() => ShowPage(false, null));
         ShowStoreCommand = new RelayCommand(() => ShowPage(true, null));
-        Store = new StoreViewModel(_settings, Log, _gpu.Adapter?.Vendor.ToLowerInvariant() is "nvidia" or "amd" or "intel" ? _gpu.Adapter!.Vendor.ToLowerInvariant() : (_gpu.HasNvml ? "nvidia" : "none"), ShowConfirm);
+        Store = new StoreViewModel(_settings, Log, GpuVendor(), ShowConfirm);
         SelectTabCommand = new RelayCommand(p => { if (p is WebTabViewModel w) ShowPage(false, w); });
         CloseTabCommand = new RelayCommand(p => { if (p is WebTabViewModel w) CloseTab(w); });
         OpenTabInBrowserCommand = new RelayCommand(p => { if (p is WebTabViewModel w) OpenInBrowser(w.Url); });
@@ -447,8 +448,28 @@ public sealed class MainViewModel : ObservableObject
     public string GpuDetail => _gpu.Detail;
     public string? GpuNote => _counterNote ?? _gpu.Note;
     public bool HasGpuNote => !string.IsNullOrEmpty(GpuNote);
-    public bool HasSensors => _gpu.HasNvml;
-    public string DataLocation => AppPaths.IsPortable ? $"Portable · {AppPaths.Data}" : AppPaths.Data;
+    public bool HasSensors => _gpu.HasSensors;
+
+    /// <summary>"nvidia", "amd", "intel" or "none": picks the right download build in Get apps.</summary>
+    private string GpuVendor()
+    {
+        if (Os.Current.IsMac) return "none";
+        string n = _gpu.Name.ToUpperInvariant();
+        return n.Contains("NVIDIA", StringComparison.Ordinal) || n.Contains("GEFORCE", StringComparison.Ordinal) || n.Contains("RTX", StringComparison.Ordinal) ? "nvidia"
+            : n.Contains("AMD", StringComparison.Ordinal) || n.Contains("RADEON", StringComparison.Ordinal) ? "amd"
+            : n.Contains("INTEL", StringComparison.Ordinal) || n.Contains("ARC", StringComparison.Ordinal) ? "intel"
+            : "none";
+    }
+    public string DataLocation => AppPaths.DisplayLocation;
+    public bool CanOptimizeDrives => Os.Current.CanOptimizeDrives;
+    public string DrivesTitle => Os.Current.CanOptimizeDrives ? "Drives & fragmentation" : "Drives";
+    public string DrivesFootnote => Os.Current.CanOptimizeDrives
+        ? "Blocks are drawn to scale from Windows' last drive analysis: blue = used, orange = fragmented, flat = free."
+        : "Blocks are drawn to scale: blue = used, flat = free. macOS looks after its SSDs itself, so there's nothing to defragment.";
+    public string ProcessesTitle => _gpu.PerProcessIsGpuMemory ? "Using the GPU" : "Biggest memory users";
+    public string ProcessesColumn => _gpu.PerProcessIsGpuMemory ? _gpu.MemoryLabel : "RAM";
+    public string MemoryLabel => _gpu.MemoryLabel;
+    public string ToolMemoryLabel => _gpu.PerProcessIsGpuMemory ? "VRAM" : "RAM";
 
     public string VramUsed { get => _vramUsed; private set => Set(ref _vramUsed, value); }
     public string VramTotal { get => _vramTotal; private set => Set(ref _vramTotal, value); }
@@ -667,6 +688,7 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             var p = ToolController.Start(t.Definition);
+            _monitor.RegisterLaunch(t.Id, p);
             t.MarkLaunched(p);
             Log.Info(t.Name, "Starting…");
             _monitor.RequestScan();
@@ -835,27 +857,34 @@ public sealed class MainViewModel : ObservableObject
         AddOpen = true;
     }
 
-    private void BrowseProgram()
+    private async void BrowseProgram()
     {
-        var dlg = new Microsoft.Win32.OpenFileDialog
+        if (Ui.Dialogs is null) return;
+        string? picked;
+        try
         {
-            Title = "Choose the program or launcher",
-            Filter = "Programs and launchers (*.exe;*.bat;*.cmd;*.vbs)|*.exe;*.bat;*.cmd;*.vbs|All files (*.*)|*.*",
-            CheckFileExists = true,
-        };
-        if (dlg.ShowDialog() != true) return;
-        AddProgram = dlg.FileName;
+            picked = await Ui.Dialogs.PickProgramAsync();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        {
+            AddError = "Couldn't open the file picker: " + ex.Message;
+            return;
+        }
+
+        if (picked is null) return;
+        AddProgram = picked;
         if (string.IsNullOrWhiteSpace(AddName))
         {
-            AddName = Path.GetFileNameWithoutExtension(dlg.FileName).Replace('_', ' ').Replace('-', ' ');
+            AddName = Path.GetFileNameWithoutExtension(picked.TrimEnd('/')).Replace('_', ' ').Replace('-', ' ');
         }
     }
 
     private void SaveAdd()
     {
-        string program = AddProgram.Trim().Trim('"');
+        string program = PathSafety.Norm(AddProgram.Trim().Trim('"'));
+        bool isBundle = program.EndsWith(".app", StringComparison.OrdinalIgnoreCase) && Directory.Exists(program);
         if (string.IsNullOrWhiteSpace(AddName)) { AddError = "Give it a name."; return; }
-        if (!File.Exists(program)) { AddError = "Choose a program that exists."; return; }
+        if (!File.Exists(program) && !isBundle) { AddError = "Choose a program that exists."; return; }
 
         int? port = null;
         if (!string.IsNullOrWhiteSpace(AddPort))
@@ -876,7 +905,7 @@ public sealed class MainViewModel : ObservableObject
             Url = string.IsNullOrWhiteSpace(AddUrl) ? (port is int pp ? $"http://127.0.0.1:{pp}" : null) : AddUrl.Trim(),
         };
 
-        if (ext == ".vbs")
+        if (ext == ".vbs" && Os.Current.IsWindows)
         {
             def.FileName = "wscript.exe";
             def.Arguments = $"\"{program}\" {def.Arguments}".Trim();
@@ -886,11 +915,20 @@ public sealed class MainViewModel : ObservableObject
             def.FileName = program;
         }
 
-        // A program sitting in a shared folder (Downloads, Desktop, a drive root) is matched by file only,
-        // so PCHUB never claims unrelated programs that happen to live beside it.
-        if (PathSafety.IsTooBroad(folder))
+        // macOS has no console window to show, so scripts always log to a file there.
+        if (Os.Current.IsMac && ext == ".sh") def.Hidden = true;
+
+        if (isBundle)
         {
-            if (ext != ".exe")
+            // A Mac app bundle is its own folder: everything running from inside it belongs to it.
+            def.MatchPaths.Add(program);
+        }
+        else if (PathSafety.IsTooBroad(folder))
+        {
+            // A program sitting in a shared folder (Downloads, Desktop, a drive root) is matched by file only,
+            // so PCHUB never claims unrelated programs that happen to live beside it.
+            bool singleProgram = Os.Current.IsWindows ? ext == ".exe" : ext is "" or ".bin";
+            if (!singleProgram)
             {
                 AddError = "Launchers in shared folders like Downloads or Desktop can't be tracked. Move the app into its own folder first.";
                 return;
@@ -951,7 +989,7 @@ public sealed class MainViewModel : ObservableObject
     private async Task FreeGpuAsync(List<ToolViewModel> targets)
     {
         _freeing = true;
-        CommandManager.InvalidateRequerySuggested();
+        RelayCommand.RefreshAll();
         FreeStatus = "Freeing…";
         try
         {
@@ -992,7 +1030,7 @@ public sealed class MainViewModel : ObservableObject
         finally
         {
             _freeing = false;
-            CommandManager.InvalidateRequerySuggested();
+            RelayCommand.RefreshAll();
         }
     }
 
@@ -1075,7 +1113,7 @@ public sealed class MainViewModel : ObservableObject
             view = log; // fall back to the raw file
         }
 
-        ShellOpen("notepad.exe", $"\"{view}\"");
+        OpenText(view);
     }
 
     private void OpenToolFolder(ToolViewModel t)
@@ -1093,6 +1131,15 @@ public sealed class MainViewModel : ObservableObject
         }
 
         ShellOpen(dir);
+    }
+
+    private void OpenText(string file)
+    {
+        try { Os.Current.OpenTextFile(file); }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Log.Error("PCHUB", $"Couldn't open {file}: {ex.Message}");
+        }
     }
 
     private void ShellOpen(string target, string? args = null)

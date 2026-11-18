@@ -1,6 +1,7 @@
-using PcHub.Native;
+using PcHub.Platform;
+using PcHub.Services;
 
-namespace PcHub.Services;
+namespace PcHub.Platform.Windows;
 
 /// <summary>
 /// The GPU being watched. NVIDIA cards get NVML (temperature, power, clocks, fan); every other

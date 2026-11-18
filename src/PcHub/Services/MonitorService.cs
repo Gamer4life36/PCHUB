@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using PcHub.Platform;
 
 namespace PcHub.Services;
 
@@ -27,22 +28,19 @@ public sealed record MonitorSnapshot(GpuSample? Gpu, ProcessPart? Processes);
 /// </summary>
 public sealed class MonitorService : IDisposable
 {
-    private readonly GpuContext _gpu;
-    private readonly ProcessScanner _scanner = new();
-    private readonly GpuProcessCounters _counters;
+    private readonly IGpuMonitor _gpu;
+    private readonly IPlatform _os = Os.Current;
     private readonly CancellationTokenSource _cts = new();
-    private readonly object _nvmlGate = new();
     private volatile IReadOnlyList<ToolDefinition> _tools = [];
     private volatile bool _scanNow;
     private volatile bool _lowPower;
     private GpuSample? _lastCounterSample;
     private Task? _loop;
 
-    public MonitorService(GpuContext gpu, bool lowPower)
+    public MonitorService(IGpuMonitor gpu, bool lowPower)
     {
         _gpu = gpu;
         _lowPower = lowPower;
-        _counters = new GpuProcessCounters(gpu.Adapter?.LuidTag);
     }
 
     /// <summary>Raised on a background thread.</summary>
@@ -64,6 +62,32 @@ public sealed class MonitorService : IDisposable
         set => _background = value;
     }
 
+    /// <summary>
+    /// Processes PCHUB started for a tool: pid → (tool id, create time, filled in on first sight). They and
+    /// their children belong to that tool even when their exe lives outside its folder (on macOS a venv's
+    /// python is a symlink to Homebrew's, and proc_pidpath reports the real file).
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, LaunchRoot> _roots = new();
+
+    private sealed class LaunchRoot(string toolId)
+    {
+        public string ToolId { get; } = toolId;
+        public long CreateTime { get; set; }
+    }
+
+    public void RegisterLaunch(string toolId, Process? launched)
+    {
+        if (launched is null) return;
+        try
+        {
+            if (!launched.HasExited) _roots[launched.Id] = new LaunchRoot(toolId);
+        }
+        catch (InvalidOperationException)
+        {
+            // Already gone (e.g. "open -a" handing off to Launch Services); path matching still applies.
+        }
+    }
+
     public void SetTools(IReadOnlyList<ToolDefinition> tools)
     {
         _tools = tools;
@@ -76,18 +100,7 @@ public sealed class MonitorService : IDisposable
     public void Start() => _loop ??= Task.Run(() => RunAsync(_cts.Token));
 
     /// <summary>Total VRAM in use right now (used to measure before/after freeing).</summary>
-    public ulong? ReadUsedBytesNow()
-    {
-        if (_gpu.HasNvml)
-        {
-            lock (_nvmlGate) return _gpu.Nvml!.Read()?.UsedBytes;
-        }
-
-        // Adapter memory only: cheap, and leaves the per-engine load baselines untouched.
-        long bytes;
-        lock (_counters) bytes = _counters.ReadAdapterBytes();
-        return bytes >= 0 ? (ulong)bytes : null;
-    }
+    public ulong? ReadUsedBytesNow() => _gpu.UsedBytesNow();
 
     private async Task RunAsync(CancellationToken ct)
     {
@@ -99,11 +112,7 @@ public sealed class MonitorService : IDisposable
             bool bg = _background;
             try
             {
-                GpuSample? gpu = null;
-                if (_gpu.HasNvml)
-                {
-                    lock (_nvmlGate) gpu = _gpu.Nvml!.Read();
-                }
+                GpuSample? gpu = _gpu.ReadFast();
 
                 ProcessPart? part = null;
                 int scanEvery = bg || low ? 3 : 2;
@@ -142,17 +151,11 @@ public sealed class MonitorService : IDisposable
     {
         long t0 = Stopwatch.GetTimestamp();
         var tools = _tools;
-        var procs = _scanner.Scan();
-        CounterReading reading;
-        lock (_counters) reading = _counters.Read();
+        var procs = _os.ScanProcesses();
+        var reading = _gpu.ReadScan(procs);
         var usage = reading.PerProcess;
         var owner = Attribute(procs, tools);
-
-        if (!_gpu.HasNvml && _gpu.Adapter is not null)
-        {
-            _lastCounterSample = new GpuSample((ulong)Math.Max(0, reading.AdapterDedicatedBytes), _gpu.TotalBytes,
-                (int)Math.Round(reading.AdapterUtilPercent), null, null, null, null, null, null);
-        }
+        if (reading.Sample is not null) _lastCounterSample = reading.Sample;
 
         // Read the OS table of listening ports once (instant; no connection attempts).
         var listening = PortProbe.ListeningPorts();
@@ -197,7 +200,7 @@ public sealed class MonitorService : IDisposable
         }
 
         rows.Sort((a, b) => b.Usage.DedicatedBytes.CompareTo(a.Usage.DedicatedBytes));
-        return new ProcessPart(statuses, rows, Stopwatch.GetElapsedTime(t0).TotalMilliseconds, _counters.Error);
+        return new ProcessPart(statuses, rows, Stopwatch.GetElapsedTime(t0).TotalMilliseconds, reading.Error);
     }
 
     /// <summary>
@@ -207,7 +210,7 @@ public sealed class MonitorService : IDisposable
     /// python.exe from elsewhere), except browsers, shells and Windows programs the tool merely opened.
     /// A parent must be older than its child, so a reused PID can't pull in a stranger.
     /// </summary>
-    private static Dictionary<int, string> Attribute(IReadOnlyDictionary<int, ProcInfo> procs, IReadOnlyList<ToolDefinition> tools)
+    private Dictionary<int, string> Attribute(IReadOnlyDictionary<int, ProcInfo> procs, IReadOnlyList<ToolDefinition> tools)
     {
         var owner = new Dictionary<int, string>();
         if (tools.Count == 0) return owner;
@@ -228,6 +231,25 @@ public sealed class MonitorService : IDisposable
             }
 
             if (best is not null) owner[p.Pid] = best;
+        }
+
+        // Processes PCHUB launched. The create time is pinned on first sight so a reused PID never counts.
+        foreach (var (pid, root) in _roots)
+        {
+            if (!procs.TryGetValue(pid, out var p) || tools.All(t => t.Id != root.ToolId))
+            {
+                _roots.TryRemove(pid, out _);
+                continue;
+            }
+
+            if (root.CreateTime == 0) root.CreateTime = p.CreateTime;
+            if (root.CreateTime != p.CreateTime)
+            {
+                _roots.TryRemove(pid, out _);
+                continue;
+            }
+
+            owner.TryAdd(pid, root.ToolId);
         }
 
         foreach (var p in procs.Values)
@@ -258,7 +280,7 @@ public sealed class MonitorService : IDisposable
     {
         foreach (string f in t.MatchFiles)
         {
-            if (path.Equals(f, StringComparison.OrdinalIgnoreCase)) return int.MaxValue;
+            if (path.Equals(f, Os.Current.PathComparison)) return int.MaxValue;
         }
 
         int best = 0;

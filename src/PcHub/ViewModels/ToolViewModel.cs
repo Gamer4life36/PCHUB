@@ -60,9 +60,17 @@ public sealed class ToolViewModel : ObservableObject
             {
                 Raise(nameof(CanStart));
                 Raise(nameof(CanStop));
+                Raise(nameof(IsUp));
+                Raise(nameof(IsTransitioning));
             }
         }
     }
+
+    /// <summary>Running or ready (green dot).</summary>
+    public bool IsUp => State is ToolState.Running or ToolState.Ready;
+
+    /// <summary>Starting or stopping (amber dot).</summary>
+    public bool IsTransitioning => State is ToolState.Starting or ToolState.Stopping;
 
     public bool CanStart => State == ToolState.Stopped;
     public bool CanStop => State is ToolState.Running or ToolState.Ready || (State == ToolState.Starting && Processes.Count > 0);
@@ -123,9 +131,13 @@ public sealed class ToolViewModel : ObservableObject
         finally { p.Dispose(); }
 
         // Wrapper launchers (wscript, cmd for windowed apps) exit right after starting the real app.
-        if (_stopRequested || !Definition.Hidden || code == 0) return;
-        string msg = $"Exited unexpectedly (code {code}). Open its log for details.";
-        System.Windows.Application.Current?.Dispatcher.InvokeAsync(() =>
+        // On macOS an app bundle is started by "open -a", which fails with a non-zero code if the app won't open.
+        bool viaOpen = Definition.FileName.EndsWith(".app", StringComparison.OrdinalIgnoreCase);
+        if (_stopRequested || code == 0 || (!Definition.Hidden && !viaOpen)) return;
+        string msg = viaOpen
+            ? $"macOS couldn't open {Name} (code {code}). Was it moved, or blocked in Privacy & Security?"
+            : $"Exited unexpectedly (code {code}). Open its log for details.";
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             Error = msg;
             _log.Error(Name, msg);

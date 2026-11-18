@@ -1,18 +1,9 @@
+using PcHub.Platform;
+using PcHub.Services;
 using System.Text;
-using PcHub.Native;
 
-namespace PcHub.Services;
+namespace PcHub.Platform.Windows;
 
-public sealed record GpuSample(
-    ulong UsedBytes,
-    ulong TotalBytes,
-    int LoadPercent,
-    int? TemperatureC,
-    double? PowerWatts,
-    double? PowerLimitWatts,
-    int? FanPercent,
-    int? CoreMhz,
-    int? MemoryMhz);
 
 /// <summary>One NVIDIA GPU read through NVML. Thread-safe for a single polling thread.</summary>
 public sealed unsafe class NvmlGpu : IDisposable

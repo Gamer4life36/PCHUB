@@ -1,23 +1,11 @@
+using PcHub.Platform;
+using PcHub.Services;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
 
-namespace PcHub.Services;
+namespace PcHub.Platform.Windows;
 
-public enum DriveKind
-{
-    Unknown,
-    Ssd,
-    Hdd,
-}
 
-public sealed record DriveStatus(
-    string Letter,
-    string Label,
-    DriveKind Kind,
-    long TotalBytes,
-    long FreeBytes,
-    int? FragmentationPercent,
-    DateTime? LastOptimized);
 
 /// <summary>
 /// Drive space, SSD/HDD type and fragmentation for every fixed drive, readable without admin rights:

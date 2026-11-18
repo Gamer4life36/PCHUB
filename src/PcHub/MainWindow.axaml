@@ -1,0 +1,586 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:PcHub.Controls"
+        xmlns:vm="using:PcHub.ViewModels"
+        xmlns:svc="using:PcHub.Services"
+        x:Class="PcHub.MainWindow"
+        Title="PCHUB"
+        Width="1240" Height="820" MinWidth="820" MinHeight="560"
+        Background="{StaticResource Bg}" Foreground="{StaticResource Text}">
+
+    <Window.KeyBindings>
+        <KeyBinding Gesture="F5" Command="{Binding ReloadToolsCommand}" />
+    </Window.KeyBindings>
+
+    <Grid>
+        <Grid Margin="20,16,20,14" RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
+
+            <!-- Header -->
+            <DockPanel Grid.Row="0" Margin="0,0,0,14" LastChildFill="False">
+                <StackPanel DockPanel.Dock="Left">
+                    <TextBlock Text="PCHUB" FontSize="22" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,4,0,0" FontSize="13">
+                        <Run Text="{Binding GpuName}" FontWeight="SemiBold" />
+                        <Run Text="  ·  " Foreground="{StaticResource Muted}" />
+                        <Run Text="{Binding GpuDetail}" Foreground="{StaticResource Muted}" />
+                    </TextBlock>
+                    <TextBlock Margin="0,3,0,0" FontSize="12" Foreground="{StaticResource Accent}" Text="{Binding CompactStats}"
+                               IsVisible="{Binding ShowCompactStats}" />
+                </StackPanel>
+
+                <StackPanel DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Button Classes="primary" Command="{Binding FreeGpuCommand}" Padding="18,9" FontSize="14"
+                            AutomationProperties.Name="Free the GPU"
+                            ToolTip.Tip="Close your AI apps and unload Ollama models to give the GPU memory back (asks first)">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="M2,8 L6,12 L14,3" Stroke="#0B1A10" StrokeThickness="2.2" Margin="0,1,8,0" VerticalAlignment="Center" />
+                            <TextBlock Text="Free the GPU" Foreground="#0B1A10" FontWeight="SemiBold" />
+                        </StackPanel>
+                    </Button>
+                    <TextBlock Text="{Binding FreeStatus}" Classes="label" HorizontalAlignment="Right" Margin="0,6,0,0" MaxWidth="420" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </DockPanel>
+
+            <!-- Tabs: Dashboard, Get apps, and apps opened inside PCHUB -->
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,12">
+                <Button Content="Dashboard" Command="{Binding ShowDashboardCommand}" Padding="14,6" Margin="0,0,6,0"
+                        Classes.current="{Binding IsDashboard}" />
+                <Button Content="Get apps" Command="{Binding ShowStoreCommand}" Padding="14,6" Margin="0,0,6,0"
+                        Classes.current="{Binding IsStore}" ToolTip.Tip="Find image, video and chat apps online" />
+                <ItemsControl ItemsSource="{Binding WebTabs}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:WebTabViewModel">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,6,0">
+                                <Button Padding="12,6" MaxWidth="260" Classes.current="{Binding IsSelected}"
+                                        AutomationProperties.Name="{Binding Title}" ToolTip.Tip="{Binding Title}"
+                                        Command="{Binding $parent[Window].DataContext.SelectTabCommand}" CommandParameter="{Binding}">
+                                    <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                </Button>
+                                <Button Content="✕" Classes="ghost" Padding="6,4" FontSize="11"
+                                        AutomationProperties.Name="Close tab" ToolTip.Tip="Close this tab (the app keeps running)"
+                                        Command="{Binding $parent[Window].DataContext.CloseTabCommand}" CommandParameter="{Binding}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+
+            <!-- GPU note (e.g. no temperature on this GPU / OS) -->
+            <Border Grid.Row="2" Margin="0,0,0,12" Padding="12,8" CornerRadius="8" Background="{StaticResource WarnBg}" BorderBrush="#4A3B12" BorderThickness="1"
+                    IsVisible="{Binding ShowGpuNote}">
+                <TextBlock Text="{Binding GpuNote}" Foreground="{StaticResource Warn}" TextWrapping="Wrap" FontSize="12" />
+            </Border>
+
+            <!-- Stat tiles -->
+            <UniformGrid Grid.Row="3" Rows="1" Columns="4" Margin="-6,0,-6,14" IsVisible="{Binding IsDashboard}">
+                <Border Classes="card" Margin="6,0">
+                    <Grid RowDefinitions="Auto,Auto,Auto,52">
+                        <TextBlock Text="{Binding MemoryLabel}" Classes="label" />
+                        <TextBlock Grid.Row="1" Margin="0,2,0,0">
+                            <Run Text="{Binding VramUsed}" FontSize="28" FontWeight="SemiBold" />
+                            <Run Text=" GB" Foreground="{StaticResource Muted}" FontSize="14" />
+                        </TextBlock>
+                        <Grid Grid.Row="2" Margin="0,4,0,6" ColumnDefinitions="*,Auto">
+                            <ProgressBar Height="4" MinHeight="4" Minimum="0" Maximum="100" Value="{Binding VramPercent}" Foreground="{StaticResource Accent}"
+                                         Background="{StaticResource Surface2}" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="1" Text="{Binding VramTotal}" Classes="label" Margin="10,0,0,0" />
+                        </Grid>
+                        <c:Sparkline Grid.Row="3" Series="{Binding VramSeries}" Maximum="100" Stroke="{StaticResource Accent}" />
+                    </Grid>
+                </Border>
+                <Border Classes="card" Margin="6,0">
+                    <Grid RowDefinitions="Auto,Auto,Auto,52">
+                        <TextBlock Text="GPU load" Classes="label" />
+                        <TextBlock Grid.Row="1" Margin="0,2,0,0" Text="{Binding Load}" Classes="big" />
+                        <TextBlock Grid.Row="2" Text="busiest engine" Classes="label" Margin="0,4,0,6" />
+                        <c:Sparkline Grid.Row="3" Series="{Binding LoadSeries}" Maximum="100" Stroke="{StaticResource Info}" />
+                    </Grid>
+                </Border>
+                <Border Classes="card" Margin="6,0">
+                    <Grid RowDefinitions="Auto,Auto,Auto,52">
+                        <TextBlock Text="Temperature" Classes="label" />
+                        <TextBlock Grid.Row="1" Margin="0,2,0,0" Text="{Binding Temp}" Classes="big" />
+                        <TextBlock Grid.Row="2" Text="{Binding TempSub}" Classes="label" Margin="0,4,0,6" />
+                        <c:Sparkline Grid.Row="3" Series="{Binding TempSeries}" Maximum="100" Stroke="{StaticResource Warn}" />
+                    </Grid>
+                </Border>
+                <Border Classes="card" Margin="6,0">
+                    <Grid RowDefinitions="Auto,Auto,Auto,52">
+                        <TextBlock Text="Power" Classes="label" />
+                        <TextBlock Grid.Row="1" Margin="0,2,0,0" Text="{Binding Power}" Classes="big" />
+                        <TextBlock Grid.Row="2" Text="{Binding PowerSub}" Classes="label" Margin="0,4,0,6" TextTrimming="CharacterEllipsis" />
+                        <c:Sparkline Grid.Row="3" Series="{Binding PowerSeries}" Maximum="{Binding PowerMax}" Stroke="{StaticResource Violet}" />
+                    </Grid>
+                </Border>
+            </UniformGrid>
+
+            <!-- Dashboard main area -->
+            <Grid Grid.Row="4" ColumnDefinitions="1.35*,14,*" IsVisible="{Binding IsDashboard}">
+                <Grid Grid.Column="0" RowDefinitions="*,14,Auto">
+
+                    <!-- Apps -->
+                    <Border Classes="card" Padding="14">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top" Margin="2,0,0,10" LastChildFill="False">
+                                <TextBlock Text="Your AI apps" Classes="title" VerticalAlignment="Center" />
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+                                    <Button Content="Add app" Command="{Binding AddAppCommand}" ToolTip.Tip="Add any program PCHUB didn't find" />
+                                    <Button Content="Find apps" Command="{Binding RescanCommand}"
+                                            ToolTip.Tip="Look for common AI apps on this computer. You choose which ones to add." />
+                                    <Button Content="Edit list" Command="{Binding EditToolsCommand}" Classes="ghost" ToolTip.Tip="Open tools.json (ports, arguments, folders)" />
+                                    <Button Content="Reload" Command="{Binding ReloadToolsCommand}" Classes="ghost" ToolTip.Tip="Reload tools.json (F5)" />
+                                </StackPanel>
+                            </DockPanel>
+
+                            <!-- Find apps results: opt-in -->
+                            <Border DockPanel.Dock="Top" Margin="0,0,0,12" Padding="14,12" CornerRadius="8" Background="{StaticResource Surface2}"
+                                    BorderBrush="{StaticResource Info}" BorderThickness="1" IsVisible="{Binding ShowScanPanel}">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding ScanStatus}" FontSize="13" TextWrapping="Wrap" />
+                                    <ScrollViewer MaxHeight="220" Margin="0,8,0,0">
+                                        <ItemsControl ItemsSource="{Binding Suggestions}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="vm:SuggestionViewModel">
+                                                    <CheckBox IsChecked="{Binding IsChecked}" Margin="0,2" ToolTip.Tip="{Binding Location}">
+                                                        <TextBlock>
+                                                            <Run Text="{Binding Name}" FontWeight="SemiBold" />
+                                                            <Run Text="{Binding Location}" Foreground="{StaticResource Muted}" FontSize="11" />
+                                                        </TextBlock>
+                                                    </CheckBox>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0" Spacing="8">
+                                        <Button Content="Not now" Command="{Binding DismissSuggestionsCommand}" Classes="ghost" />
+                                        <Button Content="Add selected" Command="{Binding AddSuggestionsCommand}" Classes="primary" Padding="14,5"
+                                                IsVisible="{Binding HasSuggestions}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Grid>
+                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="20" IsVisible="{Binding ShowEmptyState}">
+                                    <TextBlock Text="No apps added" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                    <TextBlock Text="PCHUB works fine without any. If you use local AI apps (ComfyUI, Ollama, LM Studio, Forge…), you can let PCHUB find them, or add one yourself."
+                                               Classes="label" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="360" Margin="0,6,0,0" />
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,14,0,0" Spacing="8">
+                                        <Button Content="Find my AI apps" Command="{Binding RescanCommand}" Classes="primary" Padding="14,6" />
+                                        <Button Content="Add app" Command="{Binding AddAppCommand}" />
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding Tools}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate><WrapPanel ItemWidth="310" /></ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate DataType="vm:ToolViewModel">
+                                                <Border Classes="inner" Margin="0,0,10,10" Padding="14,12">
+                                                    <StackPanel>
+                                                        <DockPanel>
+                                                            <Ellipse Classes="dot" Classes.up="{Binding IsUp}" Classes.busy="{Binding IsTransitioning}"
+                                                                     Width="9" Height="9" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding StateText}" FontSize="12"
+                                                                       Classes="state" Classes.up="{Binding IsUp}" Classes.busy="{Binding IsTransitioning}" VerticalAlignment="Center" />
+                                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"
+                                                                       ToolTip.Tip="{Binding Location}" Margin="0,0,8,0" />
+                                                        </DockPanel>
+                                                        <TextBlock Text="{Binding Subtitle}" Classes="label" Margin="17,2,0,0" />
+                                                        <UniformGrid Columns="3" Margin="0,10,0,0">
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding $parent[Window].DataContext.ToolMemoryLabel}" Classes="label" FontSize="11" />
+                                                                <TextBlock Text="{Binding VramText}" FontSize="13" FontWeight="SemiBold" />
+                                                            </StackPanel>
+                                                            <StackPanel>
+                                                                <TextBlock Text="GPU" Classes="label" FontSize="11" />
+                                                                <TextBlock Text="{Binding GpuText}" FontSize="13" FontWeight="SemiBold" />
+                                                            </StackPanel>
+                                                            <StackPanel>
+                                                                <TextBlock Text="Up" Classes="label" FontSize="11" />
+                                                                <TextBlock Text="{Binding UptimeText}" FontSize="13" FontWeight="SemiBold" />
+                                                            </StackPanel>
+                                                        </UniformGrid>
+                                                        <TextBlock Text="{Binding Error}" Foreground="{StaticResource Danger}" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"
+                                                                   IsVisible="{Binding HasError}" />
+                                                        <WrapPanel Margin="0,12,0,0">
+                                                            <Button Content="Start" Classes="primary" Padding="14,5" Margin="0,0,6,4"
+                                                                    Command="{Binding $parent[Window].DataContext.StartCommand}" CommandParameter="{Binding}" IsVisible="{Binding CanStart}" />
+                                                            <Button Content="Stop" Padding="14,5" Margin="0,0,6,4"
+                                                                    Command="{Binding $parent[Window].DataContext.StopCommand}" CommandParameter="{Binding}" IsVisible="{Binding CanStop}" />
+                                                            <Button Content="Open" Classes="ghost" ToolTip.Tip="Open inside PCHUB"
+                                                                    Command="{Binding $parent[Window].DataContext.OpenInAppCommand}" CommandParameter="{Binding}" IsVisible="{Binding HasUrl}" />
+                                                            <Button Content="Log" Classes="ghost"
+                                                                    Command="{Binding $parent[Window].DataContext.OpenLogCommand}" CommandParameter="{Binding}" IsVisible="{Binding HasLog}" />
+                                                            <Button Content="Folder" Classes="ghost"
+                                                                    Command="{Binding $parent[Window].DataContext.OpenFolderCommand}" CommandParameter="{Binding}" />
+                                                            <Button Content="Remove" Classes="ghost" ToolTip.Tip="Remove from this list (nothing is deleted)"
+                                                                    Command="{Binding $parent[Window].DataContext.RemoveToolCommand}" CommandParameter="{Binding}" />
+                                                        </WrapPanel>
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Grid>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Drives -->
+                    <Border Grid.Row="2" Classes="card" Padding="14">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top" Margin="2,0,0,10" LastChildFill="False">
+                                <TextBlock Text="{Binding DrivesTitle}" Classes="title" VerticalAlignment="Center" />
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+                                    <Button Content="Optimize drives…" Command="{Binding OptimizeDrivesCommand}" IsVisible="{Binding CanOptimizeDrives}"
+                                            ToolTip.Tip="Open Windows' Optimize Drives to analyse or defragment (asks for admin itself)" />
+                                    <Button Content="Refresh" Command="{Binding RefreshDrivesCommand}" Classes="ghost" />
+                                </StackPanel>
+                            </DockPanel>
+                            <TextBlock DockPanel.Dock="Bottom" Classes="label" FontSize="11" Margin="2,2,0,0" TextWrapping="Wrap" Text="{Binding DrivesFootnote}" />
+                            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                                <ItemsControl ItemsSource="{Binding Drives}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="vm:DriveViewModel">
+                                            <Border Classes="inner" Width="228" Margin="0,0,10,8" Padding="12,10" ToolTip.Tip="{Binding Advice}">
+                                                <StackPanel>
+                                                    <DockPanel>
+                                                        <Border DockPanel.Dock="Right" Padding="6,1" CornerRadius="4" Background="{StaticResource Bg}" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding KindText}" FontSize="11" Foreground="{StaticResource Muted}" />
+                                                        </Border>
+                                                        <TextBlock FontSize="14" TextTrimming="CharacterEllipsis">
+                                                            <Run Text="{Binding Letter}" FontWeight="SemiBold" />
+                                                            <Run Text="{Binding Label}" Foreground="{StaticResource Muted}" FontSize="12" />
+                                                        </TextBlock>
+                                                    </DockPanel>
+                                                    <c:IsoBlockMap Margin="0,2,0,8" UsedFraction="{Binding UsedFraction}" FragmentedFraction="{Binding FragmentedFraction}"
+                                                                   Seed="{Binding Seed}" IsActive="{Binding IsOptimizing}" Progress="{Binding Progress}" />
+                                                    <DockPanel>
+                                                        <Button DockPanel.Dock="Right" Content="Optimize" Padding="10,3" FontSize="12" VerticalAlignment="Center"
+                                                                Command="{Binding $parent[Window].DataContext.OptimizeDriveCommand}" CommandParameter="{Binding}"
+                                                                IsVisible="{Binding CanOptimize}" ToolTip.Tip="Run Windows' optimizer on this drive (asks for admin)" />
+                                                        <TextBlock Text="{Binding FragText}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"
+                                                                   Classes="frag" Classes.attention="{Binding NeedsAttention}" />
+                                                    </DockPanel>
+                                                    <TextBlock Text="{Binding StageText}" Foreground="{StaticResource Info}" FontSize="12" Margin="0,2,0,0" IsVisible="{Binding IsOptimizing}" />
+                                                    <TextBlock Text="{Binding UsedText}" Classes="label" Margin="0,2,0,0" />
+                                                    <TextBlock Text="{Binding LastText}" Classes="label" Margin="0,1,0,0" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
+                    </Border>
+                </Grid>
+
+                <Grid Grid.Column="2" RowDefinitions="1.1*,14,*">
+                    <!-- Processes -->
+                    <Border Classes="card" Padding="14">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top" Margin="2,0,0,8">
+                                <TextBlock DockPanel.Dock="Right" Text="{Binding ScanText}" Classes="label" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding ProcessesTitle}" Classes="title" />
+                            </DockPanel>
+                            <Grid DockPanel.Dock="Top" Margin="2,0,8,4" ColumnDefinitions="*,72,44">
+                                <TextBlock Text="Process" Classes="label" FontSize="11" />
+                                <TextBlock Grid.Column="1" Text="{Binding ProcessesColumn}" Classes="label" FontSize="11" HorizontalAlignment="Right" />
+                                <TextBlock Grid.Column="2" Text="GPU" Classes="label" FontSize="11" HorizontalAlignment="Right" />
+                            </Grid>
+                            <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                                <ItemsControl ItemsSource="{Binding GpuProcesses}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="vm:GpuProcViewModel">
+                                            <Grid ToolTip.Tip="{Binding Path}" Margin="2,5,6,5" ColumnDefinitions="*,72,44" RowDefinitions="Auto,Auto">
+                                                <TextBlock TextTrimming="CharacterEllipsis" FontSize="13">
+                                                    <Run Text="{Binding Name}" />
+                                                    <Run Text="{Binding Owner}" Foreground="{StaticResource Accent}" FontSize="11" />
+                                                </TextBlock>
+                                                <TextBlock Grid.Column="1" Text="{Binding VramText}" FontSize="13" HorizontalAlignment="Right" />
+                                                <TextBlock Grid.Column="2" Text="{Binding GpuText}" FontSize="13" Foreground="{StaticResource Muted}" HorizontalAlignment="Right" />
+                                                <ProgressBar Grid.Row="1" Grid.ColumnSpan="3" Height="2" MinHeight="2" Margin="0,4,0,0" Minimum="0" Maximum="1"
+                                                             Value="{Binding VramShare}" Foreground="{StaticResource Accent}" Background="Transparent" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- History -->
+                    <Border Grid.Row="2" Classes="card" Padding="14">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Top" Text="History" Classes="title" Margin="2,0,0,8" />
+                            <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                                <ItemsControl ItemsSource="{Binding Log.Entries}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="svc:ActivityEntry">
+                                            <Grid Margin="2,3,6,3" ColumnDefinitions="62,*">
+                                                <TextBlock Text="{Binding TimeText}" Classes="label" FontSize="11" Margin="0,1,0,0" />
+                                                <StackPanel Grid.Column="1">
+                                                    <TextBlock Text="{Binding Tool}" FontWeight="SemiBold" FontSize="12" TextWrapping="Wrap" />
+                                                    <TextBlock Text="{Binding Message}" FontSize="12" TextWrapping="Wrap"
+                                                               Classes="msg" Classes.error="{Binding IsError}" Classes.warn="{Binding IsWarn}" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
+                    </Border>
+                </Grid>
+            </Grid>
+
+            <!-- Get apps -->
+            <Border Grid.Row="2" Grid.RowSpan="3" Classes="card" Padding="16" DataContext="{Binding Store}"
+                    IsVisible="{Binding $parent[Window].DataContext.IsStore}">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <Button DockPanel.Dock="Right" Content="Search online" Command="{Binding SearchCommand}" Classes="primary"
+                                Padding="16,7" Margin="8,0,0,0" ToolTip.Tip="Search GitHub, where most local AI apps are published" />
+                        <TextBox Text="{Binding Query}" PlaceholderText="Optional words, e.g. anime, low vram, voice" AutomationProperties.Name="Search words">
+                            <TextBox.KeyBindings>
+                                <KeyBinding Gesture="Enter" Command="{Binding SearchCommand}" />
+                            </TextBox.KeyBindings>
+                        </TextBox>
+                    </DockPanel>
+
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8" LastChildFill="False">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button Content="All" Command="{Binding CategoryCommand}" CommandParameter="All" Padding="14,5" Classes.current="{Binding IsAll}" />
+                            <Button Content="Image" Command="{Binding CategoryCommand}" CommandParameter="Image" Padding="14,5" Classes.current="{Binding IsImage}" />
+                            <Button Content="Video" Command="{Binding CategoryCommand}" CommandParameter="Video" Padding="14,5" Classes.current="{Binding IsVideo}" />
+                            <Button Content="Chat" Command="{Binding CategoryCommand}" CommandParameter="Chat" Padding="14,5" Classes.current="{Binding IsChat}" />
+                            <CheckBox Content="Show NSFW (18+) apps" IsChecked="{Binding ShowAdult}" Margin="14,0,0,0" VerticalAlignment="Center"
+                                      ToolTip.Tip="Apps with no content filter. Asks you to confirm you're 18 or older." />
+                        </StackPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Classes="label" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="360">
+                                <Run Text="Downloads go to " /><Run Text="{Binding DownloadFolder}" Foreground="{StaticResource Text}" />
+                            </TextBlock>
+                            <Button Content="Change…" Command="{Binding ChangeFolderCommand}" Classes="ghost" Margin="6,0,0,0" />
+                            <Button Content="Open folder" Command="{Binding OpenFolderCommand}" Classes="ghost" />
+                        </StackPanel>
+                    </DockPanel>
+
+                    <!-- Responsibility notice: always visible on this page -->
+                    <Border DockPanel.Dock="Top" Margin="0,0,0,10" Padding="14,10" CornerRadius="8" Background="{StaticResource WarnBg}" BorderBrush="{StaticResource Warn}" BorderThickness="1">
+                        <TextBlock TextWrapping="Wrap" FontSize="12.5">
+                            <Run Text="Your responsibility: " FontWeight="SemiBold" Foreground="{StaticResource Warn}" /><Run Text="{Binding Notice}" />
+                        </TextBlock>
+                    </Border>
+
+                    <!-- Optional Claude scan -->
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                        <CheckBox Content="Scan each download with Claude (safety, legal, age gate)" IsChecked="{Binding ClaudeAgeCheck}" VerticalAlignment="Center"
+                                  ToolTip.Tip="Opt-in. Sends the app's README and the parts of its files that matter for safety and age-gating to Anthropic, using your own API key." />
+                        <TextBlock Text="{Binding ClaudeKeyText}" Classes="label" Margin="14,0,0,0" VerticalAlignment="Center" />
+                        <Button Content="Set API key…" Command="{Binding SetClaudeKeyCommand}" Classes="ghost" Margin="4,0,0,0" />
+                    </StackPanel>
+
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding Status}" Foreground="{StaticResource Info}" FontSize="12" Margin="2,0,0,8" TextWrapping="Wrap" />
+
+                    <!-- Results: SFW (left, green) | NSFW 18+ (right, red) / Not rated (bottom, grey) -->
+                    <Grid RowDefinitions="*,12,0.6*" ColumnDefinitions="*,14,*">
+                        <Border Grid.Row="0" Grid.Column="0" BorderBrush="{StaticResource Accent}" BorderThickness="2" CornerRadius="10" Padding="12,10,6,4">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Margin="2,0,0,8">
+                                    <Run Text="SFW" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource Accent}" />
+                                    <Run Text="  content filter or safe defaults" Foreground="{StaticResource Muted}" FontSize="12" />
+                                </TextBlock>
+                                <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding SfwView}" ItemTemplate="{StaticResource StoreItem}" AutomationProperties.Name="SFW apps" />
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Border>
+
+                        <Border Grid.Row="0" Grid.Column="2" BorderBrush="{StaticResource Danger}" BorderThickness="2" CornerRadius="10" Padding="12,10,6,4">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Margin="2,0,0,8">
+                                    <Run Text="NSFW (18+)" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource Danger}" />
+                                    <Run Text="  no content filter" Foreground="{StaticResource Muted}" FontSize="12" />
+                                </TextBlock>
+                                <Grid>
+                                    <ScrollViewer HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding ShowNsfwList}">
+                                        <ItemsControl ItemsSource="{Binding NsfwView}" ItemTemplate="{StaticResource StoreItem}" AutomationProperties.Name="NSFW apps" />
+                                    </ScrollViewer>
+                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="320" IsVisible="{Binding NsfwHidden}">
+                                        <TextBlock Text="Hidden" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                        <TextBlock Classes="label" TextWrapping="Wrap" TextAlignment="Center" Margin="0,6,0,0"
+                                                   Text="These apps can make adult content. Tick &quot;Show NSFW (18+) apps&quot; above to see them; you'll be asked to confirm you're 18 or older." />
+                                    </StackPanel>
+                                </Grid>
+                            </DockPanel>
+                        </Border>
+
+                        <Border Grid.Row="2" Grid.ColumnSpan="3" BorderBrush="{StaticResource Muted}" BorderThickness="2" CornerRadius="10" Padding="12,10,6,4">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Margin="2,0,0,8">
+                                    <Run Text="Not rated" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource Muted}" />
+                                    <Run Text="  online results PCHUB couldn't classify; check the project's page before downloading" Foreground="{StaticResource Muted}" FontSize="12" />
+                                </TextBlock>
+                                <Grid>
+                                    <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                                        <ItemsControl ItemsSource="{Binding UnratedView}" ItemTemplate="{StaticResource StoreItem}" AutomationProperties.Name="Not rated apps" />
+                                    </ScrollViewer>
+                                    <TextBlock Text="Press Search online to find more apps; anything PCHUB can't classify shows up here."
+                                               Classes="label" HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding NoUnrated}" />
+                                </Grid>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </DockPanel>
+            </Border>
+
+            <!-- In-app web view (ComfyUI etc.) -->
+            <Border Grid.Row="2" Grid.RowSpan="3" Classes="card" Padding="0" IsVisible="{Binding IsWebView}">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="14,10,10,10">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="4">
+                            <Button Content="Reload" Classes="ghost" Command="{Binding ReloadTabCommand}" CommandParameter="{Binding SelectedTab}" />
+                            <Button Content="Open in browser" Classes="ghost" ToolTip.Tip="Open this page in your default browser"
+                                    Command="{Binding OpenTabInBrowserCommand}" CommandParameter="{Binding SelectedTab}" />
+                        </StackPanel>
+                        <TextBlock VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                            <Run Text="{Binding SelectedTab.Title}" FontWeight="SemiBold" FontSize="14" />
+                            <Run Text="  " />
+                            <Run Text="{Binding SelectedTab.Url}" Foreground="{StaticResource Muted}" FontSize="12" />
+                        </TextBlock>
+                    </DockPanel>
+                    <Border BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" ClipToBounds="True">
+                        <Grid x:Name="WebHostGrid">
+                            <StackPanel x:Name="WebPlaceholder" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="460">
+                                <StackPanel x:Name="WaitingPanel">
+                                    <TextBlock Text="{Binding SelectedTab.WaitingText}" FontSize="15" TextWrapping="Wrap" TextAlignment="Center" />
+                                    <Button Content="Start it" Classes="primary" Padding="18,7" Margin="0,14,0,0" HorizontalAlignment="Center" Focusable="False"
+                                            Command="{Binding StartTabToolCommand}" CommandParameter="{Binding SelectedTab}"
+                                            IsVisible="{Binding SelectedTab.CanStartTool}" />
+                                </StackPanel>
+                                <StackPanel x:Name="RuntimeMissingPanel" IsVisible="False">
+                                    <TextBlock Text="Showing apps inside PCHUB needs Microsoft Edge WebView2" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" TextAlignment="Center" />
+                                    <TextBlock Classes="label" TextWrapping="Wrap" TextAlignment="Center" Margin="0,8,0,0"
+                                               Text="It comes with Windows 11 and most Windows 10 PCs, but isn't on this one. You can install it from Microsoft (free), or open this app in your browser instead." />
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,14,0,0" Spacing="8">
+                                        <Button Content="Get WebView2 from Microsoft" Click="GetWebView2_Click" />
+                                        <Button Content="Open in browser" Command="{Binding OpenTabInBrowserCommand}" CommandParameter="{Binding SelectedTab}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </DockPanel>
+            </Border>
+
+            <!-- Footer -->
+            <DockPanel Grid.Row="5" Margin="2,10,0,0">
+                <CheckBox DockPanel.Dock="Right" Content="Low-power mode" IsChecked="{Binding LowPower}" FontSize="12"
+                          ToolTip.Tip="Sample less often. Good for older computers and laptops on battery." />
+                <Button DockPanel.Dock="Right" Content="Data folder" Classes="ghost" Command="{Binding OpenDataCommand}" Margin="0,0,12,0" />
+                <TextBlock Text="{Binding DataLocation}" Classes="label" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            </DockPanel>
+        </Grid>
+
+        <!-- Confirm overlay -->
+        <Grid Background="{StaticResource Scrim}" IsVisible="{Binding ConfirmOpen}">
+            <Border Classes="card" Width="480" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="22">
+                <StackPanel>
+                    <TextBlock Text="{Binding ConfirmTitle}" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding ConfirmText}" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{StaticResource Muted}" FontSize="13" LineHeight="20" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0" Spacing="8">
+                        <Button Content="Cancel" Command="{Binding CancelConfirmCommand}" IsCancel="True" Padding="16,7" />
+                        <Button Content="{Binding ConfirmButton}" Command="{Binding ConfirmCommand}" Classes="primary" Padding="16,7"
+                                AutomationProperties.Name="{Binding ConfirmButton}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Add app overlay -->
+        <Grid Background="{StaticResource Scrim}" IsVisible="{Binding AddOpen}">
+            <Border Classes="card" Width="520" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="22">
+                <StackPanel>
+                    <TextBlock Text="Add an app" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="Any program, app or launcher script. PCHUB tracks every process running from its folder." Classes="label" TextWrapping="Wrap" Margin="0,6,0,14" />
+                    <TextBlock Text="Program" Classes="label" Margin="0,0,0,4" />
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Content="Browse…" Command="{Binding BrowseProgramCommand}" Margin="8,0,0,0" />
+                        <TextBox Text="{Binding AddProgram}" />
+                    </DockPanel>
+                    <TextBlock Text="Name" Classes="label" Margin="0,12,0,4" />
+                    <TextBox Text="{Binding AddName}" />
+                    <TextBlock Text="Arguments (optional)" Classes="label" Margin="0,12,0,4" />
+                    <TextBox Text="{Binding AddArgs}" />
+                    <Grid Margin="0,12,0,0" ColumnDefinitions="110,12,*">
+                        <StackPanel>
+                            <TextBlock Text="Port (optional)" Classes="label" Margin="0,0,0,4" />
+                            <TextBox Text="{Binding AddPort}" ToolTip.Tip="If the app serves a web page or API, its port (shows Ready when it answers)" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Web address (optional)" Classes="label" Margin="0,0,0,4" />
+                            <TextBox Text="{Binding AddUrl}" />
+                        </StackPanel>
+                    </Grid>
+                    <CheckBox Content="Run in the background (no window, output saved to a log)" IsChecked="{Binding AddHidden}" Margin="0,14,0,0" />
+                    <TextBlock Text="{Binding AddError}" Foreground="{StaticResource Danger}" TextWrapping="Wrap" Margin="0,12,0,0" IsVisible="{Binding HasAddError}" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0" Spacing="8">
+                        <Button Content="Cancel" Command="{Binding CancelAddCommand}" Padding="16,7" />
+                        <Button Content="Add" Command="{Binding SaveAddCommand}" Classes="primary" Padding="20,7" IsDefault="True" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+
+    <Window.Resources>
+        <!-- One app in Get apps (used by the SFW, NSFW and Not rated boxes) -->
+        <DataTemplate x:Key="StoreItem" DataType="vm:StoreItemViewModel">
+            <Border Classes="inner" Margin="0,0,6,8" Padding="14,12">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Margin="0,0,14,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold" />
+                            <Border Margin="10,0,0,0" Padding="6,1" CornerRadius="4" Background="{StaticResource Bg}" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding CategoryText}" FontSize="11" Foreground="{StaticResource Muted}" />
+                            </Border>
+                            <Border Classes="badge" Classes.nsfw="{Binding IsNsfw}" Classes.unrated="{Binding IsUnrated}" Margin="6,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding RatingText}" Classes="badgetext" Classes.nsfw="{Binding IsNsfw}" Classes.unrated="{Binding IsUnrated}" />
+                            </Border>
+                        </StackPanel>
+                        <TextBlock Text="{Binding Description}" Classes="label" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding Meta}" Classes="label" FontSize="11" Margin="0,4,0,0" />
+                        <ProgressBar Height="3" MinHeight="3" Margin="0,8,0,0" Minimum="0" Maximum="1" Value="{Binding Progress}"
+                                     Foreground="{StaticResource Accent}" Background="{StaticResource Bg}" IsVisible="{Binding IsBusy}" />
+                        <TextBlock Text="{Binding Status}" Foreground="{StaticResource Info}" FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap" />
+                        <Border Classes="scan" Classes.warn="{Binding AgeGateWarn}" Margin="0,6,0,0" Padding="8,5" CornerRadius="5" IsVisible="{Binding HasAgeGateText}">
+                            <TextBlock Text="{Binding AgeGateText}" Classes="scantext" Classes.warn="{Binding AgeGateWarn}" FontSize="12" TextWrapping="Wrap" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4">
+                        <Button Content="Download" Classes="primary" Padding="16,6"
+                                Command="{Binding $parent[ItemsControl].DataContext.DownloadCommand}" CommandParameter="{Binding}" IsVisible="{Binding CanDownload}" />
+                        <Button Content="Cancel" Padding="16,6"
+                                Command="{Binding $parent[ItemsControl].DataContext.CancelDownloadCommand}" CommandParameter="{Binding}" IsVisible="{Binding IsBusy}" />
+                        <Button Content="Show in folder" Classes="ghost"
+                                Command="{Binding $parent[ItemsControl].DataContext.ShowInFolderCommand}" CommandParameter="{Binding}" IsVisible="{Binding HasDownloaded}" />
+                        <Button Content="Scan with Claude" Classes="ghost"
+                                ToolTip.Tip="Ask Claude to check this download for safety and legal red flags and an age gate (uses your API key)"
+                                Command="{Binding $parent[ItemsControl].DataContext.CheckAgeGateCommand}" CommandParameter="{Binding}" IsVisible="{Binding CanCheckAgeGate}" />
+                        <Button Content="Website" Classes="ghost" ToolTip.Tip="{Binding App.Website}"
+                                Command="{Binding $parent[ItemsControl].DataContext.WebsiteCommand}" CommandParameter="{Binding}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </Window.Resources>
+</Window>

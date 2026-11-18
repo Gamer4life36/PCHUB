@@ -1,49 +1,20 @@
-using System.Security.Cryptography;
-using System.Text;
+using PcHub.Platform;
 
 namespace PcHub.Services;
 
 /// <summary>
-/// The user's own Anthropic API key, encrypted with Windows DPAPI (only this Windows user on this PC can
-/// decrypt it). It is never written to disk in plain text or shown back in the UI.
+/// The user's own Anthropic API key, kept by the operating system's secret store: DPAPI on Windows (only this
+/// Windows user can decrypt it), the Keychain on macOS. Never written in plain text or shown back in the UI.
+/// A key found elsewhere on the PC (e.g. ANTHROPIC_API_KEY) is deliberately not used: it could belong to another
+/// account, and scans are billed to whoever owns the key.
 /// </summary>
 public static class ClaudeKey
 {
-    private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("PCHUB.ClaudeKey.v1");
+    public static string? Get(AppSettings s) => Os.Current.LoadSecret(s);
 
-    /// <summary>Encrypts the key, or returns null if Windows can't (unusual profiles).</summary>
-    public static string? Protect(string key)
-    {
-        try
-        {
-            return Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(key.Trim()), Entropy, DataProtectionScope.CurrentUser));
-        }
-        catch (CryptographicException)
-        {
-            return null;
-        }
-    }
+    /// <summary>Cheap check for the UI; doesn't read or decrypt the key.</summary>
+    public static bool HasKey(AppSettings s) => Os.Current.HasSecret(s);
 
-    /// <summary>
-    /// The key the user saved in PCHUB, or null. An ANTHROPIC_API_KEY on the PC is deliberately not used:
-    /// it could belong to another account, and checks are billed to whoever owns the key.
-    /// </summary>
-    public static string? Get(AppSettings s)
-    {
-        if (!string.IsNullOrEmpty(s.ClaudeKeyProtected))
-        {
-            try
-            {
-                return Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(s.ClaudeKeyProtected), Entropy, DataProtectionScope.CurrentUser));
-            }
-            catch (Exception ex) when (ex is CryptographicException or FormatException)
-            {
-                // Saved under a different Windows user or damaged: treat as not set.
-            }
-        }
-
-        return null;
-    }
-
-    public static bool HasKey(AppSettings s) => Get(s) is not null;
+    /// <summary>Saves the key (or removes it when null/blank). False if the secret store refused.</summary>
+    public static bool Save(AppSettings s, string? key) => Os.Current.SaveSecret(s, key);
 }

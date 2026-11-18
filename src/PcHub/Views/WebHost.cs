@@ -1,33 +1,33 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Windows;
-using System.Windows.Controls;
-using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.Wpf;
+using Avalonia.Controls;
+using Avalonia.Platform;
+using Avalonia.Threading;
+using PcHub.Platform;
 using PcHub.Services;
 using PcHub.ViewModels;
 
 namespace PcHub.Views;
 
 /// <summary>
-/// Hosts the in-app web tabs. One WebView2 per tab, created on first view and kept alive while the
-/// tab is open, so switching back to ComfyUI doesn't reload it. Rules:
-///  - Pages on this PC load inside PCHUB.
-///  - Links or pop-ups to anywhere else are stopped and the user is asked before the browser opens.
-///  - If the WebView2 runtime is missing, nothing opens by itself; the user gets buttons to choose.
+/// Hosts the in-app web tabs: Edge WebView2 on Windows, Apple's WKWebView on macOS. One view per tab, created on
+/// first view and kept alive while the tab is open, so switching back to ComfyUI doesn't reload it. Rules:
+///  - Pages on this computer load inside PCHUB.
+///  - Links or pop-ups to anywhere else are stopped; only ones the user clicked ask to open the browser.
+///  - If the web view isn't available (WebView2 missing on an old Windows 10 PC), nothing opens by itself.
 /// </summary>
 public sealed class WebHost
 {
+    private const string WebView2ClientId = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+
     private readonly Grid _host;
-    private readonly FrameworkElement _placeholder;
+    private readonly Control _placeholder;
     private readonly MainViewModel _vm;
-    private readonly Dictionary<string, WebView2> _views = new();
+    private readonly Dictionary<string, NativeWebView> _views = new();
     private readonly HashSet<WebTabViewModel> _watched = new();
-    private Task<CoreWebView2Environment?>? _env;
     private bool? _runtimeOk;
 
-    public WebHost(Grid host, FrameworkElement placeholder, MainViewModel vm)
+    public WebHost(Grid host, Control placeholder, MainViewModel vm)
     {
         _host = host;
         _placeholder = placeholder;
@@ -38,37 +38,58 @@ public sealed class WebHost
         {
             try
             {
-                if (_views.TryGetValue(tab.Key, out var wv) && wv.CoreWebView2 is not null) wv.CoreWebView2.Reload();
+                if (_views.TryGetValue(tab.Key, out var wv)) wv.Refresh();
             }
-            catch (Exception ex) when (ex is COMException or InvalidOperationException or ObjectDisposedException)
+            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
             {
                 vm.Log.Warn(tab.Title, "Couldn't reload: " + ex.Message);
             }
         };
+        _ = SafeUpdateAsync();
     }
 
-    /// <summary>True when the Edge WebView2 runtime is installed (checked once).</summary>
+    public event Action<bool>? RuntimeChecked;
+
+    /// <summary>
+    /// macOS always has WKWebView. On Windows the Edge WebView2 runtime is needed; it is re-checked until found,
+    /// so installing it works without restarting PCHUB.
+    /// </summary>
     public bool RuntimeAvailable
     {
         get
         {
-            if (_runtimeOk is not true) // re-checked until found, so installing WebView2 works without a restart
-            {
-                try
-                {
-                    _runtimeOk = !string.IsNullOrEmpty(CoreWebView2Environment.GetAvailableBrowserVersionString());
-                }
-                catch (Exception ex) when (ex is WebView2RuntimeNotFoundException or DllNotFoundException or BadImageFormatException or COMException)
-                {
-                    _runtimeOk = false;
-                }
-            }
-
+            if (_runtimeOk is true) return true;
+            _runtimeOk = !OperatingSystem.IsWindows() || WebView2Installed();
             return _runtimeOk.Value;
         }
     }
 
-    public event Action<bool>? RuntimeChecked;
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static bool WebView2Installed()
+    {
+        string[] keys =
+        [
+            @"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\" + WebView2ClientId,
+            @"SOFTWARE\Microsoft\EdgeUpdate\Clients\" + WebView2ClientId,
+        ];
+        try
+        {
+            foreach (var root in new[] { Microsoft.Win32.Registry.LocalMachine, Microsoft.Win32.Registry.CurrentUser })
+            {
+                foreach (string k in keys)
+                {
+                    using var key = root.OpenSubKey(k);
+                    if (key?.GetValue("pv") is string pv && pv.Length > 0 && pv != "0.0.0.0") return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+        {
+            return true; // can't tell: let the control try
+        }
+
+        return false;
+    }
 
     private void OnVmChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -77,15 +98,9 @@ public sealed class WebHost
 
     private void OnTabsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        // Drop the views of tabs that are gone (closed, or replaced after a tool-list reload with a new key).
+        // Drop the views of tabs that are gone (closed, or replaced after a tool-list reload).
         var keys = _vm.WebTabs.Select(t => t.Key).ToHashSet();
-        foreach (var key in _views.Keys.Where(k => !keys.Contains(k)).ToList())
-        {
-            var wv = _views[key];
-            _views.Remove(key);
-            _host.Children.Remove(wv);
-            wv.Dispose();
-        }
+        foreach (var key in _views.Keys.Where(k => !keys.Contains(k)).ToList()) RemoveView(key);
 
         foreach (var tab in _watched.Where(t => !_vm.WebTabs.Contains(t)).ToList())
         {
@@ -106,14 +121,20 @@ public sealed class WebHost
         _ = SafeUpdateAsync();
     }
 
-    private void OnTabReadyChanged() => _ = SafeUpdateAsync();
+    private void OnTabReadyChanged() => Dispatcher.UIThread.Post(() => _ = SafeUpdateAsync());
 
-    /// <summary>Never lets a viewer failure vanish: it is logged and the tab shows its waiting panel.</summary>
+    private void OnTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(WebTabViewModel.Url) || sender is not WebTabViewModel tab) return;
+        if (_views.TryGetValue(tab.Key, out var wv) && Uri.TryCreate(tab.Url, UriKind.Absolute, out var uri)) wv.Navigate(uri);
+    }
+
     private async Task SafeUpdateAsync()
     {
         try
         {
-            await UpdateAsync();
+            Update();
+            await Task.CompletedTask;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -122,133 +143,94 @@ public sealed class WebHost
         }
     }
 
-    private void OnTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName != nameof(WebTabViewModel.Url) || sender is not WebTabViewModel tab) return;
-        if (_views.TryGetValue(tab.Key, out var wv) && wv.CoreWebView2 is not null &&
-            Uri.TryCreate(tab.Url, UriKind.Absolute, out var uri))
-        {
-            wv.CoreWebView2.Navigate(uri.AbsoluteUri);
-        }
-    }
-
-    private async Task UpdateAsync()
+    private void Update()
     {
         var tab = _vm.SelectedTab;
         bool showView = tab is not null && tab.IsReady && !_vm.IsOverlayOpen && RuntimeAvailable;
 
-        foreach (var (key, wv) in _views)
-        {
-            wv.Visibility = showView && key == tab!.Key ? Visibility.Visible : Visibility.Collapsed;
-        }
-
-        _placeholder.Visibility = tab is not null && !showView && !_vm.IsOverlayOpen ? Visibility.Visible : Visibility.Collapsed;
+        // Native views draw above everything else, so they are hidden while a dialog is open.
+        foreach (var (key, wv) in _views) wv.IsVisible = showView && key == tab!.Key;
+        _placeholder.IsVisible = tab is not null && !showView && !_vm.IsOverlayOpen;
         RuntimeChecked?.Invoke(RuntimeAvailable);
         if (!showView || _views.ContainsKey(tab!.Key)) return;
 
-        var view = await CreateViewAsync(tab);
-        if (view is null) return;
-        // Selection may have changed while the view was being created.
-        view.Visibility = _vm.SelectedTab == tab && !_vm.IsOverlayOpen ? Visibility.Visible : Visibility.Collapsed;
+        CreateView(tab);
     }
 
-    private async Task<WebView2?> CreateViewAsync(WebTabViewModel tab)
+    private void CreateView(WebTabViewModel tab)
     {
-        _env ??= CreateEnvironmentAsync();
-        var env = await _env;
-        if (env is null) _env = null; // allow a retry next time instead of caching the failure
-        if (env is null || _views.ContainsKey(tab.Key) || !_vm.WebTabs.Contains(tab)) return null;
-
-        var wv = new WebView2 { DefaultBackgroundColor = System.Drawing.Color.FromArgb(0x0E, 0x10, 0x14) };
-        _views[tab.Key] = wv;
-        _host.Children.Add(wv);
-        try
+        var wv = new NativeWebView();
+        wv.EnvironmentRequested += (_, e) =>
         {
-            await wv.EnsureCoreWebView2Async(env);
-        }
-        catch (Exception ex) when (ex is COMException or InvalidOperationException or WebView2RuntimeNotFoundException)
-        {
-            _vm.Log.Error(tab.Title, "Couldn't create the in-app viewer: " + ex.Message);
-            _views.Remove(tab.Key);
-            _host.Children.Remove(wv);
-            wv.Dispose();
-            return null;
-        }
-
-        var core = wv.CoreWebView2;
-        core.Settings.IsStatusBarEnabled = false;
-        core.Settings.AreDefaultScriptDialogsEnabled = true;
-        core.DocumentTitleChanged += (_, _) =>
-        {
-            // Keep the tool's name on the tab; only tabs without a tool use the page title.
-            if (tab.Tool is null && !string.IsNullOrWhiteSpace(core.DocumentTitle)) tab.Title = core.DocumentTitle;
-        };
-        core.NavigationStarting += (_, e) =>
-        {
-            if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri) && (MainViewModel.IsLocal(uri) || uri.Scheme is "about" or "data" or "blob"))
+            // Browser profile (cookies, ComfyUI settings) lives with PCHUB's data, not next to the program.
+            if (e is WindowsWebView2EnvironmentRequestedEventArgs win)
             {
-                return;
+                string folder = Path.Combine(AppPaths.Data, "webview2");
+                Directory.CreateDirectory(folder);
+                win.UserDataFolder = folder;
             }
-
-            e.Cancel = true; // leaving this PC is never automatic
-            // Only a link the user actually clicked gets a prompt; a page redirecting by itself is just blocked.
-            if (e.IsUserInitiated) _vm.HandleOpenRequest(e.Uri, tab.Title);
-            else _vm.Log.Info(tab.Title, $"Blocked the page from leaving this PC on its own ({e.Uri}).");
         };
-        core.NewWindowRequested += (_, e) =>
+
+        wv.NavigationStarted += (_, e) =>
+        {
+            var uri = e.Request;
+            if (uri is null || MainViewModel.IsLocal(uri) || uri.Scheme is "about" or "data" or "blob") return;
+
+            e.Cancel = true; // leaving this computer is never automatic
+            AskOrBlock(tab, uri);
+        };
+
+        wv.NewWindowRequested += (_, e) =>
         {
             e.Handled = true; // never pop a separate browser window by itself
-            if (e.IsUserInitiated) _vm.HandleOpenRequest(e.Uri, tab.Title);
-            else _vm.Log.Info(tab.Title, $"Blocked a pop-up the page opened on its own ({e.Uri}).");
+            if (e.Request is { } uri)
+            {
+                if (MainViewModel.IsLocal(uri)) _vm.HandleOpenRequest(uri.AbsoluteUri, tab.Title);
+                else AskOrBlock(tab, uri);
+            }
         };
-        core.ProcessFailed += (_, e) =>
+
+        wv.ProcessTerminated += (_, _) => Dispatcher.UIThread.Post(() =>
         {
-            if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
-            {
-                // The whole viewer is gone: drop it so it is rebuilt the next time the tab is shown.
-                _vm.Log.Warn(tab.Title, "The in-app viewer closed unexpectedly; it will reopen.");
-                _host.Dispatcher.InvokeAsync(() =>
-                {
-                    if (_views.Remove(tab.Key, out var dead))
-                    {
-                        _host.Children.Remove(dead);
-                        dead.Dispose();
-                    }
+            // The viewer is gone: drop it so it is rebuilt the next time the tab is shown.
+            _vm.Log.Warn(tab.Title, "The in-app viewer closed unexpectedly; it will reopen.");
+            RemoveView(tab.Key);
+            _ = SafeUpdateAsync();
+        });
 
-                    _env = null;
-                    _ = SafeUpdateAsync();
-                });
-            }
-            else
-            {
-                _vm.Log.Warn(tab.Title, $"Part of the in-app viewer stopped ({e.ProcessFailedKind}). Press Reload if the page looks wrong.");
-            }
-        };
-
-        if (Uri.TryCreate(tab.Url, UriKind.Absolute, out var start)) core.Navigate(start.AbsoluteUri);
-        return wv;
+        _views[tab.Key] = wv;
+        _host.Children.Add(wv);
+        if (Uri.TryCreate(tab.Url, UriKind.Absolute, out var start)) wv.Navigate(start);
     }
 
-    private async Task<CoreWebView2Environment?> CreateEnvironmentAsync()
+    private readonly Dictionary<string, DateTime> _lastAsk = new();
+
+    /// <summary>
+    /// A page trying to leave this computer gets at most one "open in your browser?" question every 3 seconds;
+    /// anything more (e.g. a page redirecting in a loop) is just blocked and noted in History.
+    /// </summary>
+    private void AskOrBlock(WebTabViewModel tab, Uri uri)
     {
-        try
+        var now = DateTime.UtcNow;
+        if (_lastAsk.TryGetValue(tab.Key, out var last) && now - last < TimeSpan.FromSeconds(3))
         {
-            // Browser profile (cookies, ComfyUI settings) lives with PCHUB's data, not next to the exe.
-            string folder = Path.Combine(AppPaths.Data, "webview2");
-            Directory.CreateDirectory(folder);
-            return await CoreWebView2Environment.CreateAsync(null, folder);
+            _vm.Log.Info(tab.Title, $"Blocked the page from leaving this computer ({uri.Host}).");
+            return;
         }
-        catch (Exception ex) when (ex is WebView2RuntimeNotFoundException or COMException or IOException or UnauthorizedAccessException)
-        {
-            _runtimeOk = false;
-            _vm.Log.Error("PCHUB", "The in-app viewer isn't available: " + ex.Message);
-            return null;
-        }
+
+        _lastAsk[tab.Key] = now;
+        Dispatcher.UIThread.Post(() => _vm.HandleOpenRequest(uri.AbsoluteUri, tab.Title));
+    }
+
+    private void RemoveView(string key)
+    {
+        if (!_views.Remove(key, out var wv)) return;
+        _host.Children.Remove(wv);
+        (wv as IDisposable)?.Dispose();
     }
 
     public void Dispose()
     {
-        foreach (var wv in _views.Values) wv.Dispose();
-        _views.Clear();
+        foreach (var key in _views.Keys.ToList()) RemoveView(key);
     }
 }

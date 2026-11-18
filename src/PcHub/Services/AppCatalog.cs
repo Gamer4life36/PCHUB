@@ -34,7 +34,13 @@ public sealed record CatalogApp(
     string Website,
     int? Stars = null,
     DateTime? Updated = null,
-    bool Recommended = false);
+    bool Recommended = false,
+    bool OnWindows = true,
+    bool OnMac = true)
+{
+    /// <summary>Available on the system PCHUB is running on.</summary>
+    public bool OnThisOs => OperatingSystem.IsMacOS() ? OnMac : OnWindows;
+}
 
 /// <summary>The exact file a download will fetch, shown to the user before anything is downloaded.</summary>
 public sealed record DownloadChoice(string Url, string FileName, long? SizeBytes, string? Sha256, string What);
@@ -66,9 +72,9 @@ public static partial class AppCatalog
 
         // Video
         new("FramePack", AppCategory.Video, AppRating.Nsfw, "Image-to-video that runs on 6 GB GPUs. No content filter.",
-            "lllyasviel/FramePack", "https://github.com/lllyasviel/FramePack", Recommended: true),
+            "lllyasviel/FramePack", "https://github.com/lllyasviel/FramePack", Recommended: true, OnMac: false),
         new("Wan2GP", AppCategory.Video, AppRating.Nsfw, "Wan / Hunyuan / LTX video generation for low-VRAM GPUs. No content filter.",
-            "deepbeepmeep/Wan2GP", "https://github.com/deepbeepmeep/Wan2GP", Recommended: true),
+            "deepbeepmeep/Wan2GP", "https://github.com/deepbeepmeep/Wan2GP", Recommended: true, OnMac: false),
 
         // Chat
         new("Ollama", AppCategory.Chat, AppRating.Sfw, "Run chat models locally with one command. Default models are safety-tuned.",
@@ -177,12 +183,12 @@ public static partial class AppCatalog
         if (pick is var (rel, best) && best is not null)
         {
             string? sha = best.Digest is { } d && d.Length == 71 && d.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) && d[7..].All(char.IsAsciiHexDigit) ? d[7..] : null;
-            return new DownloadChoice(best.DownloadUrl!, SafeFileName(best.Name!), best.Size, sha, $"Windows release {rel.TagName}".Trim());
+            return new DownloadChoice(best.DownloadUrl!, SafeFileName(best.Name!), best.Size, sha, $"{(OperatingSystem.IsMacOS() ? "Mac" : "Windows")} release {rel.TagName}".Trim());
         }
 
         string name = repo.Replace('/', '-') + "-source.zip";
         return new DownloadChoice($"https://api.github.com/repos/{repo}/zipball", name, null, null,
-            "Source code (no Windows installer published; see the project's install guide)");
+            (OperatingSystem.IsMacOS() ? "Source code (no Mac download published; see the project's install guide)" : "Source code (no Windows installer published; see the project's install guide)"));
     }
 
     private static async Task<List<GhRelease>> GetReleasesAsync(string url, bool single, CancellationToken ct)
@@ -222,8 +228,51 @@ public static partial class AppCatalog
         return null;
     }
 
+    /// <summary>Picks the scoring rules for the system PCHUB is running on.</summary>
+    private static int Score(string name, string gpu) =>
+        OperatingSystem.IsMacOS() ? ScoreMac(name) : ScoreWindows(name, gpu);
+
+    /// <summary>
+    /// Higher is better; 0 means "not a Mac download". Prefers disk images and Mac zips that match the Mac's chip
+    /// (Apple Silicon or Intel); "universal" builds fit both. NVIDIA/CUDA builds never run on a Mac.
+    /// </summary>
+    private static int ScoreMac(string name)
+    {
+        string n = name.ToLowerInvariant();
+        var tokens = n.Split(['-', '_', '.', ' ', '+'], StringSplitOptions.RemoveEmptyEntries);
+        string[] wrongOsTokens = ["windows", "win", "win64", "win32", "linux", "ubuntu", "debian", "android", "ios"];
+        string[] wrongEndings = [".exe", ".msi", ".bat", ".cmd", ".appimage", ".deb", ".rpm", ".sha256", ".sig", ".asc", ".txt", ".json", ".yml", ".yaml", ".blockmap", ".whl", ".7z"];
+        if (tokens.Any(t => wrongOsTokens.Contains(t)) || wrongEndings.Any(e => n.EndsWith(e, StringComparison.Ordinal))) return 0;
+        if (n.Contains("cuda") || n.Contains("nvidia") || n.Contains("rocm")) return 0;
+
+        bool macTagged = tokens.Any(t => t is "mac" or "macos" or "darwin" or "osx" or "apple" or "universal" or "dmg");
+        int score = n switch
+        {
+            _ when n.EndsWith(".dmg", StringComparison.Ordinal) => 60,
+            _ when n.EndsWith(".pkg", StringComparison.Ordinal) => 50,
+            _ when n.EndsWith(".zip", StringComparison.Ordinal) && macTagged => 45,
+            _ when n.EndsWith(".tgz", StringComparison.Ordinal) && macTagged => 30,
+            _ when n.EndsWith(".tar.gz", StringComparison.Ordinal) && macTagged => 30,
+            _ when !n.Contains('.') && macTagged => 35, // single-file Mac programs (e.g. koboldcpp-mac-arm64)
+            _ => 0,
+        };
+        if (score == 0) return 0;
+        if (macTagged) score += 20;
+
+        bool arm = n.Contains("arm64") || n.Contains("aarch64") || n.Contains("apple-silicon") || n.Contains("applesilicon") || tokens.Contains("m1");
+        bool intel = n.Contains("x64") || n.Contains("x86_64") || n.Contains("amd64") || tokens.Contains("intel");
+        bool universal = n.Contains("universal");
+        bool weAreArm = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64;
+        if (universal) score += 10;
+        else if (arm && !weAreArm) return 0;
+        else if (intel && weAreArm) score -= 20; // runs under Rosetta, but a native build is better
+        else if (arm == weAreArm && (arm || intel)) score += 15;
+        if (n.Contains("debug") || n.Contains("symbols")) score -= 40;
+        return Math.Max(score, 0);
+    }
+
     /// <summary>Higher is better; 0 means "not a Windows download". gpu is "nvidia", "amd", "intel" or "none".</summary>
-    private static int Score(string name, string gpu)
+    private static int ScoreWindows(string name, string gpu)
     {
         string n = name.ToLowerInvariant();
         // Whole-word OS tokens (so "Studio" or "Macro" in a name isn't mistaken for macOS/iOS) and non-installer files.
@@ -368,7 +417,7 @@ public static partial class AppCatalog
                 }
 
                 // Mark before the rename: the mark travels with the file, so it is never visible unmarked.
-                MarkFromInternet(part, url.AbsoluteUri);
+                PcHub.Platform.Os.Current.MarkFromInternet(part, url.AbsoluteUri);
                 for (int i = 0; ; i++)
                 {
                     try
@@ -419,9 +468,11 @@ public static partial class AppCatalog
     {
         get
         {
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             foreach (string baseDir in new[]
             {
-                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                // On macOS .NET maps MyDocuments to the home folder, so use ~/Documents there.
+                OperatingSystem.IsMacOS() ? Path.Combine(home, "Documents") : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             })
@@ -430,20 +481,6 @@ public static partial class AppCatalog
             }
 
             return Path.Combine(AppContext.BaseDirectory, "PCHUB Downloads");
-        }
-    }
-
-    /// <summary>True when the file got the "downloaded from the internet" mark (fails on FAT32/exFAT drives).</summary>
-    private static bool MarkFromInternet(string file, string url)
-    {
-        try
-        {
-            File.WriteAllText(file + ":Zone.Identifier", $"[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=https://github.com/\r\nHostUrl={url}\r\n");
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            return false;
         }
     }
 

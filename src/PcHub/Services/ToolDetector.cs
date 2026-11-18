@@ -1,45 +1,43 @@
+using PcHub.Platform;
+
 namespace PcHub.Services;
 
 /// <summary>
-/// Finds common local-AI apps on any PC: fixed install locations plus a shallow (2-level) look
-/// through each fixed drive and the user's Desktop/Documents/Downloads for known folder layouts.
-/// It only reads directory listings; nothing is started or changed.
+/// Finds common local-AI apps: the platform's fixed install locations, plus a shallow (2-level) look through
+/// the drives / home folder for known folder layouts. Works on Windows and macOS. It only reads directory
+/// listings; nothing is started or changed.
 /// </summary>
 public static class ToolDetector
 {
     private static readonly HashSet<string> SkipNames = new(StringComparer.OrdinalIgnoreCase)
     {
+        // Windows
         "Windows", "Program Files", "Program Files (x86)", "ProgramData", "$Recycle.Bin", "$WinREAgent",
         "System Volume Information", "Recovery", "PerfLogs", "Users", "Config.Msi", "MSOCache",
-        "node_modules", ".git", "AppData", "OneDriveTemp", "$SysReset", "Intel", "AMD", "NVIDIA",
+        "AppData", "OneDriveTemp", "$SysReset", "Intel", "AMD", "NVIDIA",
+        // macOS
+        "Library", "System", "Applications", "Volumes", "private", "usr", "bin", "sbin", "cores", "dev", "etc", "opt", "tmp", "var",
+        ".Trash", "Movies", "Music", "Pictures", "Public",
+        // both
+        "node_modules", ".git", ".cache", ".npm",
     };
-
-    private static readonly (string Exe, string Name)[] KnownDesktopApps =
-    [
-        ("LM Studio.exe", "LM Studio"),
-        ("Jan.exe", "Jan"),
-        ("ComfyUI.exe", "ComfyUI Desktop"),
-        ("Invoke Community Edition.exe", "Invoke"),
-        ("Pinokio.exe", "Pinokio"),
-        ("AnythingLLM.exe", "AnythingLLM"),
-        ("Msty.exe", "Msty"),
-    ];
 
     public static List<ToolDefinition> Detect(IReadOnlyCollection<string>? excludes = null)
     {
+        var os = Os.Current;
         var found = new List<ToolDefinition>();
         var excluded = (excludes ?? [])
             .Where(e => !string.IsNullOrWhiteSpace(e))
-            .Select(e => Path.GetFullPath(Environment.ExpandEnvironmentVariables(e)).TrimEnd('\\'))
+            .Select(e => PathSafety.Norm(Environment.ExpandEnvironmentVariables(e)))
             .ToList();
 
-        DetectFixedLocations(found);
+        os.DetectFixedApps(found);
 
-        foreach (string dir in CandidateFolders(excluded))
+        foreach (string dir in CandidateFolders(os, excluded))
         {
             try
             {
-                DetectInFolder(dir, found);
+                DetectInFolder(os, dir, found);
             }
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
             {
@@ -50,74 +48,13 @@ public static class ToolDetector
         return Dedupe(found);
     }
 
-    private static void DetectFixedLocations(List<ToolDefinition> found)
+    private static void DetectInFolder(IPlatform os, string d, List<ToolDefinition> found)
     {
-        string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-
-        foreach (string dir in new[] { Path.Combine(local, @"Programs\Ollama"), Path.Combine(pf, "Ollama") })
+        // A general folder (Downloads, a drive root, the home folder) can't be claimed as one app's folder;
+        // only single-file apps found there are added, matched by their exact file.
+        if (os.IsTooBroad(d))
         {
-            string exe = Path.Combine(dir, "ollama.exe");
-            if (File.Exists(exe))
-            {
-                found.Add(new ToolDefinition
-                {
-                    Id = "ollama", Name = "Ollama", Kind = "Ollama",
-                    FileName = exe, Arguments = "serve", WorkingDirectory = dir, Hidden = true,
-                    MatchPaths = [dir], Port = 11434,
-                });
-                break;
-            }
-        }
-
-        string programs = Path.Combine(local, "Programs");
-        if (Directory.Exists(programs))
-        {
-            foreach (string sub in SafeDirs(programs))
-            {
-                foreach (var (exeName, name) in KnownDesktopApps)
-                {
-                    string exe = Path.Combine(sub, exeName);
-                    if (!File.Exists(exe))
-                    {
-                        continue;
-                    }
-
-                    var t = new ToolDefinition
-                    {
-                        Id = Slug(name), Name = name, FileName = exe, WorkingDirectory = sub, MatchPaths = [sub],
-                    };
-                    if (name == "LM Studio")
-                    {
-                        // LM Studio runs its model engines from ~/.lmstudio.
-                        string engines = Path.Combine(home, ".lmstudio");
-                        if (Directory.Exists(engines)) t.MatchPaths.Add(engines);
-                    }
-
-                    found.Add(t);
-                }
-            }
-        }
-
-        foreach (string chat in new[] { Path.Combine(home, @"gpt4all\bin\chat.exe"), Path.Combine(pf, @"gpt4all\bin\chat.exe") })
-        {
-            if (File.Exists(chat))
-            {
-                string root = Path.GetDirectoryName(Path.GetDirectoryName(chat))!;
-                found.Add(new ToolDefinition { Id = "gpt4all", Name = "GPT4All", FileName = chat, WorkingDirectory = root, MatchPaths = [root] });
-                break;
-            }
-        }
-    }
-
-    private static void DetectInFolder(string d, List<ToolDefinition> found)
-    {
-        // A general folder (Downloads, a drive root, the user folder) can't be claimed as one app's folder;
-        // only single-exe apps found there are added, matched by their exact file.
-        if (PathSafety.IsTooBroad(d))
-        {
-            DetectKobold(d, found);
+            DetectKobold(os, d, found);
             return;
         }
 
@@ -125,12 +62,12 @@ public static class ToolDetector
         bool HasDir(string rel) => Directory.Exists(Path.Combine(d, rel));
 
         // ComfyUI portable (Windows zip release)
-        if (Has(@"python_embeded\python.exe") && Has(@"ComfyUI\main.py"))
+        if (os.IsWindows && Has(Path.Combine("python_embeded", "python.exe")) && Has(Path.Combine("ComfyUI", "main.py")))
         {
             found.Add(new ToolDefinition
             {
                 Id = "comfyui", Name = "ComfyUI",
-                FileName = Path.Combine(d, @"python_embeded\python.exe"),
+                FileName = Path.Combine(d, "python_embeded", "python.exe"),
                 Arguments = @"-s ComfyUI\main.py --windows-standalone-build",
                 WorkingDirectory = d, Hidden = true, MatchPaths = [d],
                 Port = 8188, Url = "http://127.0.0.1:8188",
@@ -141,8 +78,7 @@ public static class ToolDetector
         // ComfyUI from git with its own venv
         if (Has("main.py") && Has("nodes.py") && HasDir("comfy"))
         {
-            string? py = FirstExisting(d, @"venv\Scripts\python.exe", @".venv\Scripts\python.exe");
-            if (py is not null)
+            if (os.VenvPython(d) is { } py)
             {
                 found.Add(new ToolDefinition
                 {
@@ -156,32 +92,47 @@ public static class ToolDetector
         }
 
         // AUTOMATIC1111 / Forge / reForge
-        if (Has("webui-user.bat") && Has("webui.py"))
+        if (Has("webui.py") && (Has("webui-user.bat") || Has("webui.sh")))
         {
             string name = HasDir("modules_forge") ? "Forge" : "Stable Diffusion WebUI";
-            found.Add(BatchTool(name, d, "webui-user.bat", 7860));
+            found.Add(ScriptTool(os, name, d, os.IsWindows ? "webui-user.bat" : "webui.sh", 7860));
             return;
         }
 
-        if (HasDir("Fooocus") && Has(@"Fooocus\entry_with_update.py") && Has("run.bat"))
+        if (HasDir("Fooocus") && Has(Path.Combine("Fooocus", "entry_with_update.py")))
         {
-            found.Add(BatchTool("Fooocus", d, "run.bat", 7865));
+            if (os.IsWindows && Has("run.bat"))
+            {
+                found.Add(ScriptTool(os, "Fooocus", d, "run.bat", 7865));
+            }
+            else if (os.VenvPython(Path.Combine(d, "Fooocus")) is { } fpy)
+            {
+                found.Add(new ToolDefinition
+                {
+                    Id = "fooocus", Name = "Fooocus", FileName = fpy, Arguments = "entry_with_update.py",
+                    WorkingDirectory = Path.Combine(d, "Fooocus"), Hidden = true, MatchPaths = [d],
+                    Port = 7865, Url = "http://127.0.0.1:7865",
+                });
+            }
+
             return;
         }
 
-        if (Has("launch-windows.bat") && HasDir("src") && Has(@"src\SwarmUI.csproj"))
+        if (HasDir("src") && Has(Path.Combine("src", "SwarmUI.csproj")))
         {
-            found.Add(BatchTool("SwarmUI", d, "launch-windows.bat", 7801));
+            string script = os.IsWindows ? "launch-windows.bat" : "launch-macos.sh";
+            if (Has(script)) found.Add(ScriptTool(os, "SwarmUI", d, script, 7801));
             return;
         }
 
-        if (Has("start_windows.bat") && Has("server.py") && HasDir("modules"))
+        if (Has("server.py") && HasDir("modules"))
         {
-            found.Add(BatchTool("Text Generation WebUI", d, "start_windows.bat", 7860));
+            string script = os.IsWindows ? "start_windows.bat" : "start_macos.sh";
+            if (Has(script)) found.Add(ScriptTool(os, "Text Generation WebUI", d, script, 7860));
             return;
         }
 
-        string? invoke = FirstExisting(d, @".venv\Scripts\invokeai-web.exe", @"venv\Scripts\invokeai-web.exe");
+        string? invoke = os.FindExecutable(Path.Combine(d, ".venv"), "invokeai-web") ?? os.FindExecutable(Path.Combine(d, "venv"), "invokeai-web");
         if (invoke is not null)
         {
             found.Add(new ToolDefinition
@@ -192,61 +143,46 @@ public static class ToolDetector
             return;
         }
 
-        DetectKobold(d, found);
+        DetectKobold(os, d, found);
     }
 
-    /// <summary>KoboldCpp is a single exe that often sits in Downloads, so match the file, not the folder.</summary>
-    private static void DetectKobold(string d, List<ToolDefinition> found)
+    /// <summary>KoboldCpp is a single file that often sits in Downloads, so match the file, not the folder.</summary>
+    private static void DetectKobold(IPlatform os, string d, List<ToolDefinition> found)
     {
-        foreach (string exe in Directory.EnumerateFiles(d, "koboldcpp*.exe"))
+        string pattern = os.IsWindows ? "koboldcpp*.exe" : "koboldcpp-mac*";
+        foreach (string exe in Directory.EnumerateFiles(d, pattern))
         {
             found.Add(new ToolDefinition
             {
-                Id = "koboldcpp", Name = "KoboldCpp", FileName = exe, WorkingDirectory = d,
+                Id = "koboldcpp", Name = "KoboldCpp", FileName = exe, WorkingDirectory = d, Hidden = !os.IsWindows,
                 MatchFiles = [exe], Port = 5001, Url = "http://127.0.0.1:5001",
             });
         }
     }
 
-    private static ToolDefinition BatchTool(string name, string dir, string bat, int port) => new()
+    /// <summary>A tool started by a script (.bat on Windows, .sh on macOS).</summary>
+    private static ToolDefinition ScriptTool(IPlatform os, string name, string dir, string script, int port) => new()
     {
         Id = Slug(name),
         Name = name,
-        FileName = Path.Combine(dir, bat),
+        FileName = Path.Combine(dir, script),
         WorkingDirectory = dir,
+        // macOS has no console window to show, so script output always goes to a log there.
+        Hidden = !os.IsWindows,
         MatchPaths = [dir],
         Port = port,
         Url = $"http://127.0.0.1:{port}",
     };
 
-    /// <summary>Each fixed drive and the user's main folders, two levels deep.</summary>
-    private static IEnumerable<string> CandidateFolders(List<string> excluded)
+    /// <summary>The platform's scan roots and their sub-folders, two levels deep.</summary>
+    private static IEnumerable<string> CandidateFolders(IPlatform os, List<string> excluded)
     {
-        var roots = new List<string>();
-        foreach (var drive in DriveInfo.GetDrives())
-        {
-            try
-            {
-                if (drive.DriveType == DriveType.Fixed && drive.IsReady) roots.Add(drive.RootDirectory.FullName);
-            }
-            catch (IOException) { /* drive went away */ }
-        }
-
-        foreach (var sf in new[] { Environment.SpecialFolder.Desktop, Environment.SpecialFolder.MyDocuments, Environment.SpecialFolder.UserProfile })
-        {
-            string p = Environment.GetFolderPath(sf);
-            if (!string.IsNullOrEmpty(p)) roots.Add(p);
-        }
-
-        string downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-        if (Directory.Exists(downloads)) roots.Add(downloads);
-
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string root in roots)
+        foreach (string root in os.ScanRoots())
         {
             if (IsExcluded(root, excluded) || !seen.Add(root)) continue;
             yield return root;
-            foreach (string l1 in SafeDirs(root))
+            foreach (string l1 in SafeDirs(l1Parent: root))
             {
                 if (IsExcluded(l1, excluded) || !seen.Add(l1)) continue;
                 yield return l1;
@@ -261,25 +197,21 @@ public static class ToolDetector
 
     private static bool IsExcluded(string dir, List<string> excluded)
     {
-        string d = dir.TrimEnd('\\');
+        string d = PathSafety.Norm(dir);
         foreach (string e in excluded)
         {
-            if (d.Equals(e, StringComparison.OrdinalIgnoreCase) ||
-                (d.Length > e.Length && d[e.Length] == '\\' && d.StartsWith(e, StringComparison.OrdinalIgnoreCase)))
-            {
-                return true;
-            }
+            if (d.Equals(e, StringComparison.OrdinalIgnoreCase) || PathSafety.IsUnder(d, e)) return true;
         }
 
         return false;
     }
 
-    private static IEnumerable<string> SafeDirs(string parent)
+    private static IEnumerable<string> SafeDirs(string l1Parent)
     {
         DirectoryInfo[] dirs;
         try
         {
-            dirs = new DirectoryInfo(parent).GetDirectories();
+            dirs = new DirectoryInfo(l1Parent).GetDirectories();
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or System.Security.SecurityException)
         {
@@ -288,7 +220,7 @@ public static class ToolDetector
 
         foreach (var di in dirs)
         {
-            if (SkipNames.Contains(di.Name) || di.Name.StartsWith('$') ||
+            if (SkipNames.Contains(di.Name) || di.Name.StartsWith('$') || di.Name.EndsWith(".app", StringComparison.OrdinalIgnoreCase) ||
                 (di.Attributes & (FileAttributes.System | FileAttributes.ReparsePoint)) != 0)
             {
                 continue;
@@ -296,17 +228,6 @@ public static class ToolDetector
 
             yield return di.FullName;
         }
-    }
-
-    private static string? FirstExisting(string dir, params string[] rels)
-    {
-        foreach (string r in rels)
-        {
-            string p = Path.Combine(dir, r);
-            if (File.Exists(p)) return p;
-        }
-
-        return null;
     }
 
     private static List<ToolDefinition> Dedupe(List<ToolDefinition> tools)
@@ -317,14 +238,15 @@ public static class ToolDetector
         var nameCount = tools.GroupBy(t => t.Name).ToDictionary(g => g.Key, g => g.Count());
         foreach (var t in tools)
         {
-            string key = t.FileName + "|" + string.Join(';', t.MatchPaths) + "|" + string.Join(';', t.MatchFiles);
+            string key = t.FileName + "|" + t.Arguments + "|" + string.Join(';', t.MatchPaths) + "|" + string.Join(';', t.MatchFiles);
             if (!keys.Add(key)) continue;
 
             if (nameCount[t.Name] > 1)
             {
                 // Two installs of the same app: tell them apart by folder name (full path is in the tooltip).
-                string folder = Path.GetFileName((t.WorkingDirectory ?? "").TrimEnd('\\'));
-                string parent = Path.GetFileName(Path.GetDirectoryName((t.WorkingDirectory ?? "").TrimEnd('\\')) ?? "");
+                string wd = PathSafety.Norm(t.WorkingDirectory ?? "");
+                string folder = Path.GetFileName(wd);
+                string parent = Path.GetFileName(Path.GetDirectoryName(wd) ?? "");
                 string tag = folder.Equals(t.Name, StringComparison.OrdinalIgnoreCase) ? parent : folder;
                 if (!string.IsNullOrEmpty(tag)) t.Name = $"{t.Name} ({tag})";
             }

@@ -1,8 +1,10 @@
+using PcHub.Platform;
+using PcHub.Services;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 
-namespace PcHub.Services;
+namespace PcHub.Platform.Windows;
 
 /// <summary>
 /// Runs Windows' own optimizer (defrag.exe) on one drive. It needs admin, so it is started with

@@ -1,9 +1,8 @@
-using PcHub.Native;
+using PcHub.Platform;
+using PcHub.Services;
 
-namespace PcHub.Services;
+namespace PcHub.Platform.Windows;
 
-/// <summary>A process seen in one scan. CreateTime is a UTC FILETIME and, with Pid, identifies it uniquely.</summary>
-public sealed record ProcInfo(int Pid, int ParentPid, string Name, string? Path, long CreateTime);
 
 /// <summary>
 /// Lists processes with one Toolhelp snapshot (no per-process Process objects) and caches

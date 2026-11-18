@@ -1,0 +1,160 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Text -->
+    <Style Selector="TextBlock.label">
+        <Setter Property="Foreground" Value="{StaticResource Muted}" />
+        <Setter Property="FontSize" Value="12" />
+    </Style>
+    <Style Selector="TextBlock.title">
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.big">
+        <Setter Property="FontSize" Value="28" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <!-- Cards -->
+    <Style Selector="Border.card">
+        <Setter Property="Background" Value="{StaticResource Surface}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="16" />
+    </Style>
+    <Style Selector="Border.inner">
+        <Setter Property="Background" Value="{StaticResource Surface2}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+    </Style>
+
+    <!-- Buttons -->
+    <Style Selector="Button">
+        <Setter Property="Background" Value="{StaticResource Surface2}" />
+        <Setter Property="Foreground" Value="{StaticResource Text}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="12,6" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#262D38" />
+        <Setter Property="Foreground" Value="{StaticResource Text}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+    </Style>
+    <Style Selector="Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#2E3644" />
+    </Style>
+
+    <Style Selector="Button.primary">
+        <Setter Property="Background" Value="{StaticResource Accent}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+        <Setter Property="Foreground" Value="#0B1A10" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#3FCB72" />
+        <Setter Property="BorderBrush" Value="#3FCB72" />
+        <Setter Property="Foreground" Value="#0B1A10" />
+    </Style>
+
+    <Style Selector="Button.ghost">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource Muted}" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="FontSize" Value="12" />
+    </Style>
+
+    <!-- A tab or chip that is the current one -->
+    <Style Selector="Button.current">
+        <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+        <Setter Property="Foreground" Value="{StaticResource Accent}" />
+    </Style>
+
+    <!-- Inputs -->
+    <Style Selector="TextBox">
+        <Setter Property="Background" Value="{StaticResource Bg}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="8,6" />
+        <Setter Property="FontSize" Value="13" />
+    </Style>
+
+    <!-- Tool status dot -->
+    <Style Selector="Ellipse.dot">
+        <Setter Property="Fill" Value="{StaticResource Muted}" />
+    </Style>
+    <Style Selector="Ellipse.dot.up">
+        <Setter Property="Fill" Value="{StaticResource Accent}" />
+    </Style>
+    <Style Selector="Ellipse.dot.busy">
+        <Setter Property="Fill" Value="{StaticResource Warn}" />
+    </Style>
+    <Style Selector="TextBlock.state">
+        <Setter Property="Foreground" Value="{StaticResource Muted}" />
+    </Style>
+    <Style Selector="TextBlock.state.up">
+        <Setter Property="Foreground" Value="{StaticResource Accent}" />
+    </Style>
+    <Style Selector="TextBlock.state.busy">
+        <Setter Property="Foreground" Value="{StaticResource Warn}" />
+    </Style>
+
+    <!-- History levels -->
+    <Style Selector="TextBlock.msg">
+        <Setter Property="Foreground" Value="{StaticResource Muted}" />
+    </Style>
+    <Style Selector="TextBlock.msg.error">
+        <Setter Property="Foreground" Value="{StaticResource Danger}" />
+    </Style>
+    <Style Selector="TextBlock.msg.warn">
+        <Setter Property="Foreground" Value="{StaticResource Warn}" />
+    </Style>
+
+    <!-- Rating badges -->
+    <Style Selector="Border.badge">
+        <Setter Property="Background" Value="{StaticResource SfwBadge}" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="6,1" />
+    </Style>
+    <Style Selector="Border.badge.nsfw">
+        <Setter Property="Background" Value="{StaticResource BadBg}" />
+    </Style>
+    <Style Selector="Border.badge.unrated">
+        <Setter Property="Background" Value="{StaticResource Bg}" />
+    </Style>
+    <Style Selector="TextBlock.badgetext">
+        <Setter Property="Foreground" Value="{StaticResource Accent}" />
+        <Setter Property="FontSize" Value="11" />
+    </Style>
+    <Style Selector="TextBlock.badgetext.nsfw">
+        <Setter Property="Foreground" Value="{StaticResource Danger}" />
+    </Style>
+    <Style Selector="TextBlock.badgetext.unrated">
+        <Setter Property="Foreground" Value="{StaticResource Muted}" />
+    </Style>
+
+    <!-- Claude scan result box -->
+    <Style Selector="Border.scan">
+        <Setter Property="Background" Value="{StaticResource OkBg}" />
+    </Style>
+    <Style Selector="Border.scan.warn">
+        <Setter Property="Background" Value="{StaticResource WarnBg}" />
+    </Style>
+    <Style Selector="TextBlock.scantext">
+        <Setter Property="Foreground" Value="{StaticResource Accent}" />
+    </Style>
+    <Style Selector="TextBlock.scantext.warn">
+        <Setter Property="Foreground" Value="{StaticResource Warn}" />
+    </Style>
+
+    <!-- Drive fragmentation text -->
+    <Style Selector="TextBlock.frag.attention">
+        <Setter Property="Foreground" Value="{StaticResource Warn}" />
+    </Style>
+</Styles>

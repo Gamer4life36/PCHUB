@@ -1,6 +1,8 @@
+using PcHub.Platform;
+using PcHub.Services;
 using System.Runtime.InteropServices;
 
-namespace PcHub.Native;
+namespace PcHub.Platform.Windows;
 
 /// <summary>
 /// Minimal P/Invoke surface for NVIDIA's NVML (nvml.dll ships with the driver in System32).

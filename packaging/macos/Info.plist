@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>PCHUB</string>
+    <key>CFBundleDisplayName</key>
+    <string>PCHUB</string>
+    <key>CFBundleIdentifier</key>
+    <string>app.pchub.desktop</string>
+    <key>CFBundleExecutable</key>
+    <string>PCHUB</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <!-- Lets the built-in web view load AI apps running on this Mac (http://127.0.0.1:port). -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <!-- Shown by macOS when "Find my AI apps" or a download touches these folders. -->
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>PCHUB looks here for AI apps you installed and saves downloads to Documents/PCHUB Downloads.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>PCHUB looks here for AI apps you installed.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>PCHUB looks here for AI apps you installed.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>PCHUB looks on external drives for AI apps you installed.</string>
+</dict>
+</plist>

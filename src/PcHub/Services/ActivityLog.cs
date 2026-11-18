@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Threading.Channels;
-using System.Windows.Threading;
+using Avalonia.Threading;
 
 namespace PcHub.Services;
 
@@ -11,6 +11,8 @@ public sealed class ActivityEntry
     public required string Tool { get; init; }
     public required string Level { get; init; }
     public required string Message { get; init; }
+    public bool IsError => Level == "Error";
+    public bool IsWarn => Level == "Warn";
     public string TimeText => Time.Date == DateTime.Today ? Time.ToString("HH:mm:ss") : Time.ToString("MMM d HH:mm");
 }
 

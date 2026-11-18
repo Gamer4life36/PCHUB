@@ -1,6 +1,8 @@
+using PcHub.Platform;
+using PcHub.Services;
 using System.Runtime.InteropServices;
 
-namespace PcHub.Native;
+namespace PcHub.Platform.Windows;
 
 /// <summary>A physical display adapter as Windows sees it (any vendor).</summary>
 public sealed record AdapterInfo(string Name, uint VendorId, ulong DedicatedBytes, string LuidTag)

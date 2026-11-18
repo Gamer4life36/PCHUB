@@ -19,7 +19,8 @@ public static class PortProbe
                 set.Add(ep.Port);
             }
         }
-        catch (System.Net.NetworkInformation.NetworkInformationException)
+        catch (Exception ex) when (ex is System.Net.NetworkInformation.NetworkInformationException or PlatformNotSupportedException
+                                       or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
             // Table unavailable: tools just show "Running" instead of "Ready".
         }

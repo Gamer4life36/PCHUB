@@ -1,0 +1,31 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PcHub.App"
+             RequestedThemeVariant="Dark">
+    <Application.Resources>
+        <ResourceDictionary>
+            <!-- Palette -->
+            <SolidColorBrush x:Key="Bg" Color="#0E1014" />
+            <SolidColorBrush x:Key="Surface" Color="#161A21" />
+            <SolidColorBrush x:Key="Surface2" Color="#1D222B" />
+            <SolidColorBrush x:Key="Line" Color="#262C36" />
+            <SolidColorBrush x:Key="Text" Color="#E6E9EF" />
+            <SolidColorBrush x:Key="Muted" Color="#8B93A1" />
+            <SolidColorBrush x:Key="Accent" Color="#4ADE80" />
+            <SolidColorBrush x:Key="Info" Color="#5AA9FF" />
+            <SolidColorBrush x:Key="Warn" Color="#F2B33D" />
+            <SolidColorBrush x:Key="Danger" Color="#F26D6D" />
+            <SolidColorBrush x:Key="Violet" Color="#B48CFF" />
+            <SolidColorBrush x:Key="Scrim" Color="#B3000000" />
+            <SolidColorBrush x:Key="WarnBg" Color="#2A2412" />
+            <SolidColorBrush x:Key="OkBg" Color="#13261B" />
+            <SolidColorBrush x:Key="BadBg" Color="#3A1A1A" />
+            <SolidColorBrush x:Key="SfwBadge" Color="#173323" />
+        </ResourceDictionary>
+    </Application.Resources>
+
+    <Application.Styles>
+        <FluentTheme />
+        <StyleInclude Source="avares://PCHUB/Themes/Theme.axaml" />
+    </Application.Styles>
+</Application>

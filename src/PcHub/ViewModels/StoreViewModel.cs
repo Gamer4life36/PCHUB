@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Windows.Data;
 using System.Windows.Input;
 using PcHub.Services;
 
@@ -21,6 +20,8 @@ public sealed class StoreItemViewModel : ObservableObject
     public string Name => App.Name;
     public string Description => App.Description;
     public string CategoryText => App.Category.ToString();
+    public bool IsNsfw => App.Rating == AppRating.Nsfw;
+    public bool IsUnrated => App.Rating == AppRating.Unrated;
     public string RatingText => App.Rating switch { AppRating.Sfw => "SFW", AppRating.Nsfw => "NSFW 18+", _ => "Not rated" };
     public string RatingGroup => App.Rating switch
     {
@@ -114,15 +115,10 @@ public sealed class StoreViewModel : ObservableObject
         _gpu = gpuVendor;
         _confirm = confirm;
 
-        foreach (var app in AppCatalog.Recommended) Items.Add(new StoreItemViewModel(app));
-        SfwView = MakeView(AppRating.Sfw);
-        NsfwView = MakeView(AppRating.Nsfw);
-        UnratedView = MakeView(AppRating.Unrated);
-        Items.CollectionChanged += (_, _) =>
-        {
-            Raise(nameof(HasUnrated));
-            Raise(nameof(NoUnrated));
-        };
+        // Only apps that run on this system (e.g. NVIDIA-only video apps are left out on a Mac).
+        foreach (var app in AppCatalog.Recommended.Where(a => a.OnThisOs)) Items.Add(new StoreItemViewModel(app));
+        Items.CollectionChanged += (_, _) => RefreshViews();
+        RefreshViews();
 
         SearchCommand = new RelayCommand(() => _ = SearchAsync());
         CategoryCommand = new RelayCommand(p => { if (p is string c) Category = c; });
@@ -131,8 +127,8 @@ public sealed class StoreViewModel : ObservableObject
         WebsiteCommand = new RelayCommand(p => { if (p is StoreItemViewModel i) OpenUrl(i.App.Website); });
         ShowInFolderCommand = new RelayCommand(p => { if (p is StoreItemViewModel { DownloadedPath: { } path }) ShowInFolder(path); });
         CheckAgeGateCommand = new RelayCommand(p => { if (p is StoreItemViewModel { CanCheckAgeGate: true } i) _ = CheckAgeGateAsync(i); });
-        SetClaudeKeyCommand = new RelayCommand(() => SetKey());
-        ChangeFolderCommand = new RelayCommand(ChangeFolder);
+        SetClaudeKeyCommand = new RelayCommand(() => _ = SetKeyAsync());
+        ChangeFolderCommand = new RelayCommand(() => _ = ChangeFolderAsync());
         OpenFolderCommand = new RelayCommand(() =>
         {
             try
@@ -157,35 +153,36 @@ public sealed class StoreViewModel : ObservableObject
 
     public ObservableCollection<StoreItemViewModel> Items { get; } = new();
     /// <summary>Left column.</summary>
-    public ICollectionView SfwView { get; }
+    public ObservableCollection<StoreItemViewModel> SfwView { get; } = new();
 
     /// <summary>Right column (empty until the 18+ opt-in).</summary>
-    public ICollectionView NsfwView { get; }
+    public ObservableCollection<StoreItemViewModel> NsfwView { get; } = new();
 
     /// <summary>Bottom box: online results PCHUB couldn't classify.</summary>
-    public ICollectionView UnratedView { get; }
+    public ObservableCollection<StoreItemViewModel> UnratedView { get; } = new();
 
-    private ListCollectionView MakeView(AppRating rating)
-    {
-        var v = new ListCollectionView(Items);
-        v.SortDescriptions.Add(new SortDescription(nameof(StoreItemViewModel.SortRank), ListSortDirection.Descending));
-        v.Filter = o => o is StoreItemViewModel i && i.App.Rating == rating && Matches(i);
-        return v;
-    }
-
+    /// <summary>Rebuilds the three boxes from Items (filtered, recommended first, then by stars).</summary>
     private void RefreshViews()
     {
-        SfwView.Refresh();
-        NsfwView.Refresh();
-        UnratedView.Refresh();
+        Fill(SfwView, AppRating.Sfw);
+        Fill(NsfwView, AppRating.Nsfw);
+        Fill(UnratedView, AppRating.Unrated);
         Raise(nameof(HasUnrated));
         Raise(nameof(NsfwHidden));
         Raise(nameof(NoUnrated));
         Raise(nameof(ShowNsfwList));
     }
 
-    public bool HasUnrated => !UnratedView.IsEmpty;
-    public bool NoUnrated => UnratedView.IsEmpty;
+    private void Fill(ObservableCollection<StoreItemViewModel> target, AppRating rating)
+    {
+        var wanted = Items.Where(i => i.App.Rating == rating && Matches(i)).OrderByDescending(i => i.SortRank).ToList();
+        if (wanted.SequenceEqual(target)) return;
+        target.Clear();
+        foreach (var i in wanted) target.Add(i);
+    }
+
+    public bool HasUnrated => UnratedView.Count > 0;
+    public bool NoUnrated => UnratedView.Count == 0;
     public bool ShowNsfwList => _settings.ShowAdultApps;
     public bool NsfwHidden => !_settings.ShowAdultApps;
 
@@ -231,35 +228,34 @@ public sealed class StoreViewModel : ObservableObject
                 "Turn on",
                 () =>
                 {
-                    if (!HasClaudeKey && !SetKey()) return Task.CompletedTask;
-                    _settings.ClaudeAgeCheck = true;
-                    Raise(nameof(ClaudeAgeCheck));
-                    return Task.CompletedTask;
+                    return TurnOnAsync();
                 });
+
+            async Task TurnOnAsync()
+            {
+                if (!HasClaudeKey && !await SetKeyAsync()) return;
+                _settings.ClaudeAgeCheck = true;
+                Raise(nameof(ClaudeAgeCheck));
+            }
         }
     }
 
-    /// <summary>Asks for the key in a small password box; returns true if one was saved.</summary>
-    private bool SetKey()
+    /// <summary>Asks for the key in a small password box; returns true if one is saved afterwards.</summary>
+    private async Task<bool> SetKeyAsync()
     {
-        var win = new Views.ApiKeyWindow { Owner = System.Windows.Application.Current?.MainWindow };
-        if (win.ShowDialog() != true) return false;
-        if (string.IsNullOrWhiteSpace(win.Key))
+        if (Ui.Dialogs is null) return false;
+        string? key = await Ui.Dialogs.AskApiKeyAsync();
+        if (key is null) return false;
+        if (key.Length == 0)
         {
-            _settings.ClaudeKeyProtected = null;
+            ClaudeKey.Save(_settings, null);
             _settings.ClaudeAgeCheck = false;
             Raise(nameof(ClaudeAgeCheck));
         }
-        else
+        else if (!ClaudeKey.Save(_settings, key))
         {
-            string? sealedKey = ClaudeKey.Protect(win.Key);
-            if (sealedKey is null)
-            {
-                Status = "Windows couldn't store the key securely on this account, so it wasn't saved.";
-                return false;
-            }
-
-            _settings.ClaudeKeyProtected = sealedKey;
+            Status = "The system couldn't store the key securely for this account, so it wasn't saved.";
+            return false;
         }
 
         Raise(nameof(HasClaudeKey));
@@ -269,7 +265,8 @@ public sealed class StoreViewModel : ObservableObject
 
     private async Task CheckAgeGateAsync(StoreItemViewModel item)
     {
-        string? key = ClaudeKey.Get(_settings);
+        // Off the UI thread: on macOS reading the Keychain can wait on the user's "Allow" prompt.
+        string? key = await Task.Run(() => ClaudeKey.Get(_settings));
         if (key is null || item.DownloadedPath is null)
         {
             item.AgeGateText = "Claude check skipped: no API key set.";
@@ -507,11 +504,12 @@ public sealed class StoreViewModel : ObservableObject
         }
     }
 
-    private void ChangeFolder()
+    private async Task ChangeFolderAsync()
     {
-        var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "Where should PCHUB save downloads?", InitialDirectory = DownloadFolder };
-        if (dlg.ShowDialog() != true) return;
-        _settings.DownloadFolder = dlg.FolderName;
+        if (Ui.Dialogs is null) return;
+        string? folder = await Ui.Dialogs.PickFolderAsync("Where should PCHUB save downloads?", DownloadFolder);
+        if (folder is null) return;
+        _settings.DownloadFolder = folder;
         Raise(nameof(DownloadFolder));
     }
 
@@ -519,7 +517,7 @@ public sealed class StoreViewModel : ObservableObject
     {
         try
         {
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true })?.Dispose();
+            PcHub.Platform.Os.Current.RevealInFolder(path);
         }
         catch (System.ComponentModel.Win32Exception ex)
         {

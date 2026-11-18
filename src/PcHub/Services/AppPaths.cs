@@ -4,7 +4,8 @@ namespace PcHub.Services;
 /// Where settings, tools and history live:
 ///  1. Portable mode: a file named "portable" next to PCHUB.exe → data\ beside the exe (USB sticks, other drives).
 ///  2. Dev builds (running inside the source tree) → &lt;repo&gt;\data.
-///  3. Otherwise the standard per-user folder %LOCALAPPDATA%\PCHUB.
+///  3. Otherwise the standard per-user folder: %LOCALAPPDATA%\PCHUB on Windows,
+///     ~/Library/Application Support/PCHUB on macOS.
 /// </summary>
 public static class AppPaths
 {
@@ -37,8 +38,21 @@ public static class AppPaths
             }
         }
 
+        if (OperatingSystem.IsMacOS())
+        {
+            // The standard place for app data on macOS.
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return Path.Combine(home, "Library", "Application Support", "PCHUB");
+        }
+
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PCHUB");
     }
+
+    /// <summary>
+    /// When running inside a macOS .app bundle, AppContext.BaseDirectory is Contents/MacOS; portable mode and the
+    /// dev-tree search still work from there.
+    /// </summary>
+    public static string DisplayLocation => IsPortable ? $"Portable · {Data}" : Data;
 
     /// <summary>Creates the folder; if that is impossible (read-only USB stick, locked profile) uses %TEMP%\PCHUB instead.</summary>
     private static string Ensure(string path)

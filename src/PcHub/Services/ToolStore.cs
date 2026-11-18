@@ -133,7 +133,7 @@ public static class ToolStore
                 string? full = Rooted(raw);
                 if (full is null)
                 {
-                    if (!string.IsNullOrWhiteSpace(raw)) problems.Add($"'{t.Name}': ignored MatchPath '{raw}' (needs a full folder path like D:\\Apps\\Tool).");
+                    if (!string.IsNullOrWhiteSpace(raw)) problems.Add($"'{t.Name}': ignored MatchPath '{raw}' (needs a full folder path).");
                     continue;
                 }
 
@@ -143,7 +143,7 @@ public static class ToolStore
                     continue;
                 }
 
-                paths.Add(full.TrimEnd('\\'));
+                paths.Add(PathSafety.Norm(full));
             }
 
             var files = new List<string>();

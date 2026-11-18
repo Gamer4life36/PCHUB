@@ -1,6 +1,8 @@
+using PcHub.Platform;
+using PcHub.Services;
 using System.Runtime.InteropServices;
 
-namespace PcHub.Native;
+namespace PcHub.Platform.Windows;
 
 internal static unsafe partial class Win32
 {

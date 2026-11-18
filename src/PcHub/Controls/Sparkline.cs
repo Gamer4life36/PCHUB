@@ -1,5 +1,7 @@
-using System.Windows;
-using System.Windows.Media;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Media;
+using Avalonia.Media.Immutable;
 
 namespace PcHub.Controls;
 
@@ -33,103 +35,91 @@ public sealed class Series
     }
 }
 
-/// <summary>Lightweight line chart drawn straight into the render list (one frozen geometry per update).</summary>
-public sealed class Sparkline : FrameworkElement
+/// <summary>Lightweight line chart drawn straight into the render list.</summary>
+public sealed class Sparkline : Control
 {
-    public static readonly DependencyProperty SeriesProperty = DependencyProperty.Register(
-        nameof(Series), typeof(Series), typeof(Sparkline), new FrameworkPropertyMetadata(null, OnSeriesChanged));
+    public static readonly StyledProperty<Series?> SeriesProperty = AvaloniaProperty.Register<Sparkline, Series?>(nameof(Series));
+    public static readonly StyledProperty<IBrush?> StrokeProperty = AvaloniaProperty.Register<Sparkline, IBrush?>(nameof(Stroke), Brushes.LimeGreen);
+    public static readonly StyledProperty<double> MaximumProperty = AvaloniaProperty.Register<Sparkline, double>(nameof(Maximum), 100d);
 
-    public static readonly DependencyProperty StrokeProperty = DependencyProperty.Register(
-        nameof(Stroke), typeof(Brush), typeof(Sparkline), new FrameworkPropertyMetadata(Brushes.LimeGreen, FrameworkPropertyMetadataOptions.AffectsRender));
+    private IPen? _pen;
+    private IBrush? _fill;
+    private IBrush? _penFor;
 
-    public static readonly DependencyProperty MaximumProperty = DependencyProperty.Register(
-        nameof(Maximum), typeof(double), typeof(Sparkline), new FrameworkPropertyMetadata(100d, FrameworkPropertyMetadataOptions.AffectsRender));
-
-    private Pen? _pen;
-    private Brush? _fill;
-    private Brush? _penFor;
+    static Sparkline() => AffectsRender<Sparkline>(StrokeProperty, MaximumProperty, SeriesProperty);
 
     public Series? Series
     {
-        get => (Series?)GetValue(SeriesProperty);
+        get => GetValue(SeriesProperty);
         set => SetValue(SeriesProperty, value);
     }
 
-    public Brush Stroke
+    public IBrush? Stroke
     {
-        get => (Brush)GetValue(StrokeProperty);
+        get => GetValue(StrokeProperty);
         set => SetValue(StrokeProperty, value);
     }
 
     public double Maximum
     {
-        get => (double)GetValue(MaximumProperty);
+        get => GetValue(MaximumProperty);
         set => SetValue(MaximumProperty, value);
     }
 
-    private static void OnSeriesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
-        var s = (Sparkline)d;
-        if (e.OldValue is Series old) old.Updated -= s.InvalidateVisual;
-        if (e.NewValue is Series now) now.Updated += s.InvalidateVisual;
-        s.InvalidateVisual();
+        base.OnPropertyChanged(change);
+        if (change.Property != SeriesProperty) return;
+        if (change.OldValue is Series old) old.Updated -= InvalidateVisual;
+        if (change.NewValue is Series now) now.Updated += InvalidateVisual;
     }
 
-    protected override void OnRender(DrawingContext drawingContext)
+    public override void Render(DrawingContext context)
     {
-        var dc = drawingContext;
         var series = Series;
-        double w = ActualWidth, h = ActualHeight;
+        double w = Bounds.Width, h = Bounds.Height;
         if (series is null || series.Count < 2 || w <= 0 || h <= 0) return;
 
         EnsureBrushes();
         double max = Maximum > 0 ? Maximum : 1;
         double step = w / (series.Capacity - 1);
         double x0 = w - (series.Count - 1) * step;
+        Point At(int i) => new(x0 + i * step, h - Math.Clamp(series[i] / max, 0, 1) * (h - 2) - 1);
 
-        var geo = new StreamGeometry();
-        using (var ctx = geo.Open())
+        var area = new StreamGeometry();
+        using (var ctx = area.Open())
         {
-            ctx.BeginFigure(new Point(x0, h), true, true);
-            for (int i = 0; i < series.Count; i++)
-            {
-                double v = Math.Clamp(series[i] / max, 0, 1);
-                ctx.LineTo(new Point(x0 + i * step, h - v * (h - 2) - 1), true, true);
-            }
-
-            ctx.LineTo(new Point(w, h), false, false);
+            ctx.BeginFigure(new Point(x0, h), true);
+            for (int i = 0; i < series.Count; i++) ctx.LineTo(At(i));
+            ctx.LineTo(new Point(w, h));
+            ctx.EndFigure(true);
         }
 
-        geo.Freeze();
-        dc.DrawGeometry(_fill, null, geo);
+        context.DrawGeometry(_fill, null, area);
 
         var line = new StreamGeometry();
         using (var ctx = line.Open())
         {
-            for (int i = 0; i < series.Count; i++)
-            {
-                double v = Math.Clamp(series[i] / max, 0, 1);
-                var p = new Point(x0 + i * step, h - v * (h - 2) - 1);
-                if (i == 0) ctx.BeginFigure(p, false, false);
-                else ctx.LineTo(p, true, true);
-            }
+            ctx.BeginFigure(At(0), false);
+            for (int i = 1; i < series.Count; i++) ctx.LineTo(At(i));
+            ctx.EndFigure(false);
         }
 
-        line.Freeze();
-        dc.DrawGeometry(null, _pen, line);
+        context.DrawGeometry(null, _pen, line);
     }
 
     private void EnsureBrushes()
     {
-        if (ReferenceEquals(_penFor, Stroke) && _pen is not null) return;
-        _penFor = Stroke;
-        var pen = new Pen(Stroke, 1.5) { LineJoin = PenLineJoin.Round };
-        pen.Freeze();
-        _pen = pen;
-
-        Color c = Stroke is SolidColorBrush sc ? sc.Color : Colors.LimeGreen;
-        var fill = new LinearGradientBrush(Color.FromArgb(90, c.R, c.G, c.B), Color.FromArgb(0, c.R, c.G, c.B), 90);
-        fill.Freeze();
-        _fill = fill;
+        var stroke = Stroke ?? Brushes.LimeGreen;
+        if (ReferenceEquals(_penFor, stroke) && _pen is not null) return;
+        _penFor = stroke;
+        Color c = stroke is ISolidColorBrush sc ? sc.Color : Colors.LimeGreen;
+        _pen = new ImmutablePen(new ImmutableSolidColorBrush(c), 1.5, lineJoin: PenLineJoin.Round);
+        _fill = new LinearGradientBrush
+        {
+            StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+            EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
+            GradientStops = { new GradientStop(Color.FromArgb(90, c.R, c.G, c.B), 0), new GradientStop(Color.FromArgb(0, c.R, c.G, c.B), 1) },
+        }.ToImmutable();
     }
 }

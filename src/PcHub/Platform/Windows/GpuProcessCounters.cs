@@ -1,9 +1,10 @@
+using PcHub.Platform;
+using PcHub.Services;
 using System.Diagnostics;
 using System.Globalization;
 
-namespace PcHub.Services;
+namespace PcHub.Platform.Windows;
 
-public readonly record struct GpuProcUsage(long DedicatedBytes, double UtilPercent);
 
 public sealed record CounterReading(
     Dictionary<int, GpuProcUsage> PerProcess,

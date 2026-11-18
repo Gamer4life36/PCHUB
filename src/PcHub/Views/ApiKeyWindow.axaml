@@ -1,0 +1,20 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="PcHub.Views.ApiKeyWindow"
+        Title="Claude API key" Width="500" SizeToContent="Height" CanResize="False"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{StaticResource Surface}" Foreground="{StaticResource Text}">
+    <StackPanel Margin="22">
+        <TextBlock Text="Your Anthropic API key" FontSize="17" FontWeight="SemiBold" />
+        <TextBlock Classes="label" TextWrapping="Wrap" Margin="0,8,0,14" x:Name="Explain"
+                   Text="Used only for the optional Claude scan after downloads. It's stored by your system's secure key store and never shown again. Scans are billed to your Anthropic account." />
+        <TextBox x:Name="KeyBox" PasswordChar="•" RevealPassword="False" AutomationProperties.Name="API key" />
+        <TextBlock x:Name="ErrorText" Foreground="{StaticResource Danger}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" IsVisible="False" />
+        <DockPanel Margin="0,18,0,0" LastChildFill="False">
+            <Button DockPanel.Dock="Left" Content="Get a key (opens anthropic.com)" Classes="ghost" Click="GetKey_Click" />
+            <Button DockPanel.Dock="Right" Content="Save" Classes="primary" Padding="18,6" IsDefault="True" Click="Save_Click" />
+            <Button DockPanel.Dock="Right" Content="Cancel" Padding="14,6" Margin="0,0,8,0" IsCancel="True" Click="Cancel_Click" />
+            <Button DockPanel.Dock="Right" Content="Remove key" Classes="ghost" Margin="0,0,8,0" Click="Remove_Click" />
+        </DockPanel>
+    </StackPanel>
+</Window>
