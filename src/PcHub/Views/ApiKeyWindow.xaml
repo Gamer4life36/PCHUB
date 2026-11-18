@@ -1,0 +1,21 @@
+<Window x:Class="PcHub.Views.ApiKeyWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Claude API key" Width="500" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{StaticResource Surface}" Foreground="{StaticResource Text}" FontFamily="{StaticResource UiFont}">
+    <StackPanel Margin="22">
+        <TextBlock Text="Your Anthropic API key" FontSize="17" FontWeight="SemiBold" FontFamily="{StaticResource DisplayFont}" />
+        <TextBlock Style="{StaticResource Label}" TextWrapping="Wrap" Margin="0,8,0,14"
+                   Text="Used only for the optional age-gate check after downloads. It's stored encrypted for your Windows account on this PC and never shown again. Checks are billed to your Anthropic account." />
+        <PasswordBox x:Name="KeyBox" Padding="8,6" FontSize="13" Background="{StaticResource Bg}" Foreground="{StaticResource Text}"
+                     BorderBrush="{StaticResource BorderBrush}" CaretBrush="{StaticResource Text}" AutomationProperties.Name="API key" />
+        <TextBlock x:Name="ErrorText" Foreground="{StaticResource Danger}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
+        <DockPanel Margin="0,18,0,0" LastChildFill="False">
+            <Button DockPanel.Dock="Left" Content="Get a key (opens anthropic.com)" Style="{StaticResource GhostButton}" Click="GetKey_Click" />
+            <Button DockPanel.Dock="Right" Content="Save" Style="{StaticResource PrimaryButton}" Padding="18,6" IsDefault="True" Click="Save_Click" />
+            <Button DockPanel.Dock="Right" Content="Cancel" Padding="14,6" Margin="0,0,8,0" IsCancel="True" />
+            <Button DockPanel.Dock="Right" Content="Remove key" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="Remove_Click" />
+        </DockPanel>
+    </StackPanel>
+</Window>

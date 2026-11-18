@@ -1,0 +1,20 @@
+# Build output
+bin/
+obj/
+*.user
+.vs/
+
+# Published app and release zips (attach to GitHub Releases instead)
+app/
+dist/
+
+# Personal data: settings, app list, history, logs, browser profile, crash log
+data/
+
+# Local machine settings (package cache location etc.)
+nuget.config
+.claude/
+
+# Temporary files
+*.tmp
+*.part
