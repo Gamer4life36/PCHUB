@@ -205,5 +205,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A release made by hand (e.g. a draft that was then published) already has its files: leave it as it is.
+          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} already exists; nothing to do."
+            exit 0
+          fi
           (cd dist && sha256sum *.zip *.tar.gz > SHA256SUMS.txt)
           gh release create "${{ github.ref_name }}" dist/*.zip dist/*.tar.gz dist/SHA256SUMS.txt --repo "${{ github.repository }}" --title "PCHUB ${{ github.ref_name }}" --generate-notes
