@@ -119,7 +119,13 @@
 
             <!-- Dashboard main area -->
             <Grid Grid.Row="4" ColumnDefinitions="1.35*,14,*" IsVisible="{Binding IsDashboard}">
-                <Grid Grid.Column="0" RowDefinitions="*,14,Auto">
+                <Grid Grid.Column="0">
+                    <!-- The apps card keeps a usable height on short windows; the drives card gives way instead. -->
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" MinHeight="230" />
+                        <RowDefinition Height="14" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
 
                     <!-- Apps -->
                     <Border Classes="card" Padding="14">
@@ -272,7 +278,7 @@
                                                     </DockPanel>
                                                     <TextBlock Text="{Binding StageText}" Foreground="{StaticResource Info}" FontSize="12" Margin="0,2,0,0" IsVisible="{Binding IsOptimizing}" />
                                                     <TextBlock Text="{Binding UsedText}" Classes="label" Margin="0,2,0,0" />
-                                                    <TextBlock Text="{Binding LastText}" Classes="label" Margin="0,1,0,0" />
+                                                    <TextBlock Text="{Binding LastText}" Classes="label" Margin="0,1,0,0" IsVisible="{Binding LastText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                                 </StackPanel>
                                             </Border>
                                         </DataTemplate>

@@ -1,4 +1,5 @@
 using System.Globalization;
+using PcHub.Platform;
 using PcHub.Services;
 
 namespace PcHub.ViewModels;
@@ -39,7 +40,8 @@ public sealed class DriveViewModel : ObservableObject
         set { if (Set(ref _isOptimizing, value)) Raise(nameof(CanOptimize)); }
     }
 
-    public bool CanOptimize => !_isOptimizing;
+    /// <summary>Only Windows has a drive optimizer PCHUB can run.</summary>
+    public bool CanOptimize => Os.Current.CanOptimizeDrives && !_isOptimizing;
     public double Progress { get => _progress; set => Set(ref _progress, value); }
     public string StageText { get => _stageText; set => Set(ref _stageText, value); }
     public int? FragmentationPercent { get; private set; }
@@ -57,6 +59,16 @@ public sealed class DriveViewModel : ObservableObject
         long used = Math.Max(0, d.TotalBytes - d.FreeBytes);
         UsedFraction = d.TotalBytes > 0 ? (double)used / d.TotalBytes : 0;
         UsedText = $"{Size(used)} of {Size(d.TotalBytes)} used";
+
+        if (!Os.Current.CanOptimizeDrives)
+        {
+            // macOS and Linux: no fragmentation figure to show (their file systems don't need defragmenting).
+            FragText = $"{Size(d.FreeBytes)} free";
+            FragmentedFraction = 0;
+            LastText = "";
+            (Advice, NeedsAttention) = ("", false);
+            return;
+        }
 
         if (d.FragmentationPercent is int pct)
         {
