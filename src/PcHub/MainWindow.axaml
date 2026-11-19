@@ -118,11 +118,13 @@
             </UniformGrid>
 
             <!-- Dashboard main area -->
-            <Grid Grid.Row="4" ColumnDefinitions="1.35*,14,*" IsVisible="{Binding IsDashboard}">
+            <!-- Scrolls only when the window is too short for the cards (small laptop screens); see MainWindow.axaml.cs. -->
+            <ScrollViewer x:Name="DashScroll" Grid.Row="4" IsVisible="{Binding IsDashboard}" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <Grid x:Name="DashMain" ColumnDefinitions="1.35*,14,*">
                 <Grid Grid.Column="0">
                     <!-- The apps card keeps a usable height on short windows; the drives card gives way instead. -->
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="*" MinHeight="230" />
+                        <RowDefinition Height="*" MinHeight="210" />
                         <RowDefinition Height="14" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -256,9 +258,10 @@
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate DataType="vm:DriveViewModel">
-                                            <Border Classes="inner" Width="228" Margin="0,0,10,8" Padding="12,10" ToolTip.Tip="{Binding Advice}">
+                                            <!-- Map on the left, figures on the right: compact enough for 768-pixel-tall laptop screens. -->
+                                            <Border Classes="inner" Width="330" Margin="0,0,10,8" Padding="12,10" ToolTip.Tip="{Binding Advice}">
                                                 <StackPanel>
-                                                    <DockPanel>
+                                                    <DockPanel Margin="0,0,0,4">
                                                         <Border DockPanel.Dock="Right" Padding="6,1" CornerRadius="4" Background="{StaticResource Bg}" VerticalAlignment="Center">
                                                             <TextBlock Text="{Binding KindText}" FontSize="11" Foreground="{StaticResource Muted}" />
                                                         </Border>
@@ -267,18 +270,20 @@
                                                             <Run Text="{Binding Label}" Foreground="{StaticResource Muted}" FontSize="12" />
                                                         </TextBlock>
                                                     </DockPanel>
-                                                    <c:IsoBlockMap Margin="0,2,0,8" UsedFraction="{Binding UsedFraction}" FragmentedFraction="{Binding FragmentedFraction}"
-                                                                   Seed="{Binding Seed}" IsActive="{Binding IsOptimizing}" Progress="{Binding Progress}" />
-                                                    <DockPanel>
-                                                        <Button DockPanel.Dock="Right" Content="Optimize" Padding="10,3" FontSize="12" VerticalAlignment="Center"
-                                                                Command="{Binding $parent[Window].DataContext.OptimizeDriveCommand}" CommandParameter="{Binding}"
-                                                                IsVisible="{Binding CanOptimize}" ToolTip.Tip="Run Windows' optimizer on this drive (asks for admin)" />
-                                                        <TextBlock Text="{Binding FragText}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"
-                                                                   Classes="frag" Classes.attention="{Binding NeedsAttention}" />
-                                                    </DockPanel>
-                                                    <TextBlock Text="{Binding StageText}" Foreground="{StaticResource Info}" FontSize="12" Margin="0,2,0,0" IsVisible="{Binding IsOptimizing}" />
-                                                    <TextBlock Text="{Binding UsedText}" Classes="label" Margin="0,2,0,0" />
-                                                    <TextBlock Text="{Binding LastText}" Classes="label" Margin="0,1,0,0" IsVisible="{Binding LastText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                    <Grid ColumnDefinitions="150,*">
+                                                        <c:IsoBlockMap Width="150" VerticalAlignment="Center" UsedFraction="{Binding UsedFraction}" FragmentedFraction="{Binding FragmentedFraction}"
+                                                                       Seed="{Binding Seed}" IsActive="{Binding IsOptimizing}" Progress="{Binding Progress}" />
+                                                        <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding FragText}" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap"
+                                                                       Classes="frag" Classes.attention="{Binding NeedsAttention}" />
+                                                            <TextBlock Text="{Binding StageText}" Foreground="{StaticResource Info}" FontSize="12" Margin="0,2,0,0" TextWrapping="Wrap" IsVisible="{Binding IsOptimizing}" />
+                                                            <TextBlock Text="{Binding UsedText}" Classes="label" Margin="0,2,0,0" TextWrapping="Wrap" />
+                                                            <TextBlock Text="{Binding LastText}" Classes="label" Margin="0,1,0,0" TextWrapping="Wrap" IsVisible="{Binding LastText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                            <Button Content="Optimize" Padding="10,3" FontSize="12" Margin="0,6,0,0" HorizontalAlignment="Left"
+                                                                    Command="{Binding $parent[Window].DataContext.OptimizeDriveCommand}" CommandParameter="{Binding}"
+                                                                    IsVisible="{Binding CanOptimize}" ToolTip.Tip="Run Windows' optimizer on this drive (asks for admin)" />
+                                                        </StackPanel>
+                                                    </Grid>
                                                 </StackPanel>
                                             </Border>
                                         </DataTemplate>
@@ -347,6 +352,7 @@
                     </Border>
                 </Grid>
             </Grid>
+            </ScrollViewer>
 
             <!-- Get apps -->
             <Border Grid.Row="2" Grid.RowSpan="3" Classes="card" Padding="16" DataContext="{Binding Store}"

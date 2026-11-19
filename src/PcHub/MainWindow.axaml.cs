@@ -26,9 +26,17 @@ public partial class MainWindow : Window, IDialogs
         Ui.Dialogs = this;
         RestorePlacement();
         Opened += (_, _) => AttachWebHost();
+
+        // The dashboard cards share the window's height; below this they'd be squashed, so the area scrolls instead.
+        DashScroll.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == BoundsProperty) DashMain.Height = Math.Max(DashScroll.Bounds.Height, DashboardMinHeight);
+        };
         Closing += (_, _) => SavePlacement();
         Closed += (_, _) => _web?.Dispose();
     }
+
+    private const double DashboardMinHeight = 470;
 
     private void AttachWebHost()
     {
