@@ -79,15 +79,17 @@ jobs:
         if: matrix.rid == 'osx-arm64'
         run: |
           set -uo pipefail
+          # Run a copy outside the checkout, so PCHUB uses its normal data folder (inside the repo it uses ./data).
+          rm -rf "$RUNNER_TEMP/PCHUB.app" && cp -R PCHUB.app "$RUNNER_TEMP/"
           DATA="$HOME/Library/Application Support/PCHUB"
-          ./PCHUB.app/Contents/MacOS/PCHUB > smoke.log 2>&1 &
+          "$RUNNER_TEMP/PCHUB.app/Contents/MacOS/PCHUB" > smoke.log 2>&1 &
           PID=$!
           sleep 25
           if kill -0 $PID 2>/dev/null; then
             echo "PCHUB started and is still running after 25 s."
             STATUS=0
             # A second launch must hand its request to the running copy and exit, not open another window.
-            ./PCHUB.app/Contents/MacOS/PCHUB --open http://127.0.0.1:1/ > second.log 2>&1 &
+            "$RUNNER_TEMP/PCHUB.app/Contents/MacOS/PCHUB" --open http://127.0.0.1:1/ > second.log 2>&1 &
             SECOND=$!
             sleep 10
             if kill -0 $SECOND 2>/dev/null; then echo "Second launch didn't hand off:"; cat second.log; kill $SECOND; STATUS=1
@@ -99,6 +101,7 @@ jobs:
             STATUS=1
           fi
           if [ -f "$DATA/crash.log" ]; then echo "crash.log:"; cat "$DATA/crash.log"; STATUS=1; fi
+          [ -d "$DATA" ] || { echo "PCHUB never created its data folder ($DATA)."; STATUS=1; }
           if [ -f "$DATA/activity.jsonl" ]; then echo "History:"; cat "$DATA/activity.jsonl"; fi
           exit $STATUS
 
@@ -142,26 +145,40 @@ jobs:
         run: |
           set -uo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb libwebkit2gtk-4.1-0 libice6 libsm6 libfontconfig1 > /dev/null
+          sudo apt-get install -y -qq xvfb x11-apps imagemagick libwebkit2gtk-4.1-0 libice6 libsm6 libfontconfig1 > /dev/null
+          # Run a copy outside the checkout, so PCHUB uses its normal data folder (inside the repo it uses ./data).
+          rm -rf "$RUNNER_TEMP/PCHUB" && cp -a out/PCHUB "$RUNNER_TEMP/PCHUB"
+          export APP="$RUNNER_TEMP/PCHUB/PCHUB"
           DATA="$HOME/.local/share/PCHUB"
           xvfb-run -a -s "-screen 0 1440x900x24" sh -c '
-            ./out/PCHUB/PCHUB > smoke.log 2>&1 &
+            "$APP" > smoke.log 2>&1 &
             PID=$!
             sleep 25
             if ! kill -0 $PID 2>/dev/null; then echo "PCHUB exited early:"; cat smoke.log; exit 1; fi
             echo "PCHUB started and is still running after 25 s."
-            ./out/PCHUB/PCHUB --open http://127.0.0.1:1/ > second.log 2>&1 &
+            xwd -root -silent > screen.xwd || true
+            "$APP" --open http://127.0.0.1:1/ > second.log 2>&1 &
             SECOND=$!
             sleep 10
             if kill -0 $SECOND 2>/dev/null; then echo "Second launch did not hand off:"; cat second.log; kill $SECOND; exit 1; fi
             echo "Second launch handed off and exited."
             kill -0 $PID 2>/dev/null || { echo "First copy died after the hand-off:"; cat smoke.log; exit 1; }
             kill $PID
+            for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 $PID 2>/dev/null || break; sleep 1; done
           '
           STATUS=$?
+          [ -f screen.xwd ] && convert xwd:screen.xwd screenshot-${{ matrix.rid }}.png || true
           if [ -f "$DATA/crash.log" ]; then echo "crash.log:"; cat "$DATA/crash.log"; STATUS=1; fi
+          [ -d "$DATA" ] || { echo "PCHUB never created its data folder ($DATA)."; STATUS=1; }
           if [ -f "$DATA/activity.jsonl" ]; then echo "History:"; cat "$DATA/activity.jsonl"; fi
           exit $STATUS
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshot-${{ matrix.rid }}
+          path: screenshot-${{ matrix.rid }}.png
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         with:

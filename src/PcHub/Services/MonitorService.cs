@@ -230,8 +230,9 @@ public sealed class MonitorService : IDisposable
                 }
             }
 
-            // A system Python (Linux: /usr/bin/python3.x, the real file behind a venv) running inside a tool's
-            // folder belongs to that tool. Only interpreters qualify, never shells or terminals sitting there.
+            // A system Python (Linux: /usr/bin/python3.x, the real file behind a venv) running a script from a
+            // tool's folder belongs to that tool. Only interpreters running a script file qualify, never a Python
+            // prompt, shells or terminals that merely sit in the folder.
             if (best is null && p.Cwd is { } cwd)
             {
                 foreach (var t in tools)

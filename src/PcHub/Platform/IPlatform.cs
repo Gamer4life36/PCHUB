@@ -5,7 +5,8 @@ namespace PcHub.Platform;
 
 /// <summary>
 /// A process seen in one scan. CreateTime is a UTC FILETIME and, with Pid, identifies it uniquely.
-/// Cwd (Linux only) is the working folder of Python interpreters, which run from a shared system path.
+/// Cwd (Linux only) is the folder of the script a Python interpreter runs, since the interpreter itself lives in a
+/// shared system folder.
 /// </summary>
 public sealed record ProcInfo(int Pid, int ParentPid, string Name, string? Path, long CreateTime, string? Cwd = null);
 

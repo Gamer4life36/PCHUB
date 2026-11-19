@@ -123,11 +123,15 @@ internal sealed class LinuxGpuMonitor : IGpuMonitor
 
     public void Dispose() => _nvml?.Dispose();
 
-    /// <summary>The first GPU with a real display driver: AMD/NVIDIA (discrete) before Intel (integrated).</summary>
+    /// <summary>
+    /// The main GPU: NVIDIA or AMD before Intel, and before boot-time framebuffers (simpledrm, no vendor).
+    /// With several AMD GPUs (e.g. a Ryzen's built-in one plus a Radeon card), the one with the most VRAM.
+    /// </summary>
     private static (string? Card, string Vendor) FindCard()
     {
         string? best = null;
         string bestVendor = "";
+        (int Rank, ulong Vram) bestScore = (-1, 0);
         try
         {
             foreach (string card in Directory.GetDirectories("/sys/class/drm", "card*").Order(StringComparer.Ordinal))
@@ -135,10 +139,13 @@ internal sealed class LinuxGpuMonitor : IGpuMonitor
                 if (Path.GetFileName(card).Contains('-')) continue; // connectors like card0-HDMI-A-1
                 string dev = Path.Combine(card, "device");
                 string vendor = ReadText(Path.Combine(dev, "vendor")) ?? "";
-                if (best is null || (bestVendor == "0x8086" && vendor is "0x1002" or "0x10de"))
+                int rank = vendor switch { "0x10de" or "0x1002" => 2, "0x8086" => 1, _ => 0 };
+                ulong vram = LinuxNative.ReadSysNumber(Path.Combine(dev, "mem_info_vram_total")) ?? 0;
+                if (rank > bestScore.Rank || (rank == bestScore.Rank && vram > bestScore.Vram))
                 {
                     best = dev;
                     bestVendor = vendor;
+                    bestScore = (rank, vram);
                 }
             }
         }
@@ -193,28 +200,37 @@ internal sealed class LinuxPlatform : IPlatform
 
     // ---------------- processes ----------------
 
+    // pid → kernel name seen at the last scan. A process that exec()s keeps its pid and start time but changes
+    // program (sh → python), so a changed name means its path must be read again.
+    private Dictionary<int, string> _comm = new();
+
     public IReadOnlyDictionary<int, ProcInfo> ScanProcesses()
     {
         lock (_scanGate)
         {
-            string[] dirs;
+            IEnumerable<string> dirs;
             try
             {
-                dirs = Directory.GetDirectories("/proc");
+                dirs = Directory.EnumerateDirectories("/proc");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 return _cache;
             }
 
-            var next = new Dictionary<int, ProcInfo>(Math.Max(16, dirs.Length));
+            var next = new Dictionary<int, ProcInfo>(Math.Max(16, _cache.Count + 32));
+            var comm = new Dictionary<int, string>(Math.Max(16, _comm.Count + 32));
             foreach (string dir in dirs)
             {
-                if (!int.TryParse(Path.GetFileName(dir), NumberStyles.None, CultureInfo.InvariantCulture, out int pid) || pid <= 1) continue;
+                string leaf = Path.GetFileName(dir);
+                if (leaf.Length == 0 || !char.IsAsciiDigit(leaf[0])) continue;
+                if (!int.TryParse(leaf, NumberStyles.None, CultureInfo.InvariantCulture, out int pid) || pid <= 1) continue;
                 if (!LinuxNative.TryReadStat(pid, out var st)) continue;
                 if (pid == 2 || st.ParentPid == 2) continue; // kernel threads
                 long created = LinuxNative.StartFileTime(st.StartTicks);
-                if (_cache.TryGetValue(pid, out var known) && known.CreateTime == created)
+                comm[pid] = st.Comm;
+                if (_cache.TryGetValue(pid, out var known) && known.CreateTime == created &&
+                    _comm.TryGetValue(pid, out string? oldComm) && oldComm == st.Comm)
                 {
                     next[pid] = known with { ParentPid = st.ParentPid };
                     continue;
@@ -222,57 +238,168 @@ internal sealed class LinuxPlatform : IPlatform
 
                 string? path = LinuxNative.ReadLink($"/proc/{pid}/exe");
                 string name = path is not null ? Path.GetFileName(path) : st.Comm;
-                // Interpreters run from a shared system folder; their working folder tells which app they serve.
-                string? cwd = name.StartsWith("python", StringComparison.Ordinal) ? LinuxNative.ReadLink($"/proc/{pid}/cwd") : null;
-                next[pid] = new ProcInfo(pid, st.ParentPid, name, path, created, cwd);
+                // Interpreters run from a shared system folder; the script they run tells which app they serve.
+                string? scriptDir = name.StartsWith("python", StringComparison.Ordinal) ? ScriptFolder(pid) : null;
+                next[pid] = new ProcInfo(pid, st.ParentPid, name, path, created, scriptDir);
             }
 
             _cache = next;
+            _comm = comm;
             return next;
         }
     }
 
     /// <summary>
-    /// Asks each process to quit (SIGTERM), waits, then forces the rest (SIGKILL). Before every signal the
-    /// process's start time is re-checked, so a PID that now belongs to another program is never signalled.
-    /// Only the current user's own processes are touched.
+    /// The folder of the script a Python process runs ("python main.py" in ComfyUI's folder → that folder).
+    /// Null for "python -m", "python -c", an interactive prompt, or anything unreadable.
+    /// </summary>
+    private static string? ScriptFolder(int pid)
+    {
+        string[] argv;
+        try
+        {
+            argv = File.ReadAllText($"/proc/{pid}/cmdline").Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        for (int i = 1; i < argv.Length; i++)
+        {
+            string a = argv[i];
+            if (a is "-m" or "-c" or "-") return null;
+            if (a is "-X" or "-W" or "-Q")
+            {
+                i++; // options that take a value
+                continue;
+            }
+
+            if (a.StartsWith('-')) continue;
+
+            string? cwd = LinuxNative.ReadLink($"/proc/{pid}/cwd");
+            string script = Path.IsPathRooted(a) ? a : cwd is null ? "" : Path.Combine(cwd, a);
+            return script.Length > 0 && File.Exists(script) ? Path.GetDirectoryName(Path.GetFullPath(script)) : null;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Asks each process to quit (SIGTERM), waits, then forces the rest (SIGKILL). Only the current user's own
+    /// processes are touched. Each process is pinned with a pidfd (Linux 5.3+) right after its start time is
+    /// verified, so a signal can never reach a different program that reused the PID; older kernels fall back
+    /// to re-checking the start time before every signal.
     /// </summary>
     public Task<EndResult> EndProcessesAsync(IReadOnlyList<ProcInfo> procs, int graceSeconds) => Task.Run(async () =>
     {
         var errors = new List<string>();
+        uint me;
+        try
+        {
+            me = LinuxNative.GetEuid();
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return new EndResult(0, 0, ["This Linux has no glibc, so PCHUB can't end processes here: " + ex.Message]);
+        }
+
+        if (me == 0)
+        {
+            return new EndResult(0, 0, ["PCHUB is running as root, so it won't end anything (that could reach system programs). Start PCHUB as your normal user."]);
+        }
+
         var self = SelfAndAncestors();
-        uint me = LinuxNative.GetEuid();
-        var targets = new List<ProcInfo>();
-        foreach (var p in procs.Where(p => p.CreateTime != 0 && !IsProtected(p, self)).OrderByDescending(p => p.CreateTime))
+        var targets = new List<(ProcInfo Proc, int Fd)>();
+        foreach (var p in procs.OrderByDescending(p => p.CreateTime))
         {
-            if (LinuxNative.OwnerUid(p.Pid) == me) targets.Add(p);
-            else if (IsSameProcess(p)) errors.Add($"{p.Name} ({p.Pid}) runs as another user (for example a system service), so PCHUB leaves it alone.");
-        }
-
-        foreach (var p in targets.Where(IsSameProcess)) LinuxNative.Kill(p.Pid, LinuxNative.SigTerm);
-
-        if (graceSeconds > 0)
-        {
-            var deadline = DateTime.UtcNow.AddSeconds(graceSeconds);
-            while (DateTime.UtcNow < deadline && targets.Any(IsSameProcess)) await Task.Delay(250).ConfigureAwait(false);
-        }
-
-        int closed = 0, killed = 0;
-        foreach (var p in targets)
-        {
-            if (!IsSameProcess(p))
+            if (p.CreateTime == 0)
             {
-                closed++;
+                errors.Add($"Couldn't verify {p.Name} ({p.Pid}), so PCHUB left it alone.");
                 continue;
             }
 
-            if (LinuxNative.Kill(p.Pid, LinuxNative.SigKill) == 0) killed++;
-            else if (!IsSameProcess(p)) closed++; // it exited between the check and the signal
-            else errors.Add($"Couldn't end {p.Name} ({p.Pid}).");
+            if (IsProtected(p, self)) continue;
+            if (LinuxNative.OwnerUid(p.Pid) != me)
+            {
+                if (IsSameProcess(p)) errors.Add(OtherUserMessage(p));
+                continue;
+            }
+
+            if (!IsSameProcess(p)) continue; // already gone
+            int fd = LinuxNative.PidfdOpen(p.Pid);
+            if (fd >= 0 && !IsSameProcess(p))
+            {
+                LinuxNative.Close(fd); // the PID was reused between the check and the pin
+                continue;
+            }
+
+            targets.Add((p, fd));
         }
 
-        return new EndResult(closed, killed, errors);
+        try
+        {
+            foreach (var (p, fd) in targets) Signal(p, fd, LinuxNative.SigTerm);
+
+            if (graceSeconds > 0)
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(graceSeconds);
+                while (DateTime.UtcNow < deadline && targets.Any(t => IsSameProcess(t.Proc))) await Task.Delay(250).ConfigureAwait(false);
+            }
+
+            int closed = 0, killed = 0;
+            foreach (var (p, fd) in targets)
+            {
+                if (!IsSameProcess(p))
+                {
+                    closed++;
+                    continue;
+                }
+
+                if (Signal(p, fd, LinuxNative.SigKill)) killed++;
+                else if (!IsSameProcess(p)) closed++; // it exited between the check and the signal
+                else errors.Add($"Couldn't end {p.Name} ({p.Pid}).");
+            }
+
+            return new EndResult(closed, killed, errors);
+        }
+        finally
+        {
+            foreach (var (_, fd) in targets)
+            {
+                if (fd >= 0) LinuxNative.Close(fd);
+            }
+        }
     });
+
+    /// <summary>Signals through the pidfd when there is one (can't hit a reused PID), else by PID after a fresh check.</summary>
+    private static bool Signal(ProcInfo p, int fd, int signal) =>
+        fd >= 0 ? LinuxNative.PidfdSendSignal(fd, signal) : IsSameProcess(p) && p.Pid > 1 && LinuxNative.Kill(p.Pid, signal) == 0;
+
+    /// <summary>Explains a process that runs as another user, naming the systemd service when it is one (e.g. Ollama).</summary>
+    private static string OtherUserMessage(ProcInfo p)
+    {
+        try
+        {
+            foreach (string line in File.ReadLines($"/proc/{p.Pid}/cgroup"))
+            {
+                int at = line.IndexOf("/system.slice/", StringComparison.Ordinal);
+                if (at < 0) continue;
+                string unit = line[(at + 14)..].Split('/')[0];
+                if (unit.EndsWith(".service", StringComparison.Ordinal))
+                {
+                    string name = unit[..^8];
+                    return $"{p.Name} runs as the system service \"{name}\", so PCHUB leaves it alone. To stop it: sudo systemctl stop {name}";
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // fall through to the general message
+        }
+
+        return $"{p.Name} ({p.Pid}) runs as another user, so PCHUB leaves it alone.";
+    }
 
     /// <summary>Still the same, still-running process (zombies and dying processes have already exited).</summary>
     private static bool IsSameProcess(ProcInfo p) =>
@@ -293,8 +420,19 @@ internal sealed class LinuxPlatform : IPlatform
     {
         string file = t.FileName;
         bool script = file.EndsWith(".sh", StringComparison.OrdinalIgnoreCase);
+        bool appImage = file.EndsWith(".appimage", StringComparison.OrdinalIgnoreCase);
+        if (appImage && File.Exists(file) && (File.GetUnixFileMode(file) & UnixFileMode.UserExecute) == 0)
+        {
+            throw new InvalidOperationException(
+                $"{Path.GetFileName(file)} isn't allowed to run yet. In your file manager: right-click it, Properties, allow executing as a program (or run: chmod +x \"{file}\"), then press Start again.");
+        }
+
         string shell = File.Exists("/bin/bash") ? "/bin/bash" : "/bin/sh";
         string command = (script ? shell + " " : "") + Quote(file) + (string.IsNullOrWhiteSpace(t.Arguments) ? "" : " " + t.Arguments);
+
+        // Its own session, so closing the terminal PCHUB was started from (or Ctrl+C there) doesn't take the app
+        // down with it. Without --fork, setsid keeps the same PID, so PCHUB still tracks the right process.
+        if (File.Exists("/usr/bin/setsid")) command = "/usr/bin/setsid " + command;
         command = logPath is not null
             ? $"exec {command} >> {Quote(logPath)} 2>&1" // the shell owns the log, so closing PCHUB never breaks it
             : "exec " + command;
@@ -302,6 +440,9 @@ internal sealed class LinuxPlatform : IPlatform
         var psi = new ProcessStartInfo("/bin/sh") { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = workDir };
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add(command);
+
+        // AppImages need FUSE 2, which newer Ubuntu releases don't install; they can unpack themselves instead.
+        if (appImage && !HasFuse2()) psi.Environment["APPIMAGE_EXTRACT_AND_RUN"] = "1";
 
         // A desktop launcher may start PCHUB with a short PATH; AI tools often live in ~/.local/bin (pip, uv, pipx).
         string home = Home;
@@ -313,6 +454,16 @@ internal sealed class LinuxPlatform : IPlatform
 
         psi.Environment["PATH"] = path;
         return psi;
+    }
+
+    private static bool HasFuse2()
+    {
+        foreach (string dir in new[] { "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu", "/lib/x86_64-linux-gnu", "/lib/aarch64-linux-gnu", "/usr/lib64", "/usr/lib", "/lib64", "/lib" })
+        {
+            if (File.Exists(Path.Combine(dir, "libfuse.so.2"))) return true;
+        }
+
+        return false;
     }
 
     private static string Quote(string s) => "'" + s.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
@@ -369,7 +520,9 @@ internal sealed class LinuxPlatform : IPlatform
             foreach (string file in files)
             {
                 string lower = Path.GetFileName(file).ToLowerInvariant();
-                var match = KnownAppImages.FirstOrDefault(k => lower.StartsWith(k.Fragment, StringComparison.Ordinal));
+                // The name must continue with a separator or version number, so "january-notes.AppImage" isn't Jan.
+                var match = KnownAppImages.FirstOrDefault(k => lower.StartsWith(k.Fragment, StringComparison.Ordinal) &&
+                    lower.Length > k.Fragment.Length && (lower[k.Fragment.Length] is '-' or '_' or '.' || char.IsAsciiDigit(lower[k.Fragment.Length])));
                 if (match.Name is null) continue;
                 found.Add(new ToolDefinition
                 {
@@ -436,7 +589,7 @@ internal sealed class LinuxPlatform : IPlatform
 
     // ---------------- safety rules ----------------
 
-    /// <summary>System folders: never an app's folder, and their programs are never ended (except interpreters PCHUB started).</summary>
+    /// <summary>System folders: never an app's folder.</summary>
     private static readonly string[] SystemRoots =
         ["/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/lib", "/lib", "/lib64", "/usr/lib64", "/usr/libexec", "/boot", "/proc", "/sys", "/dev", "/etc"];
 
@@ -450,8 +603,18 @@ internal sealed class LinuxPlatform : IPlatform
         "NetworkManager", "sshd", "login", "polkitd", "gnome-session-binary", "ksmserver", "xdg-desktop-portal", "PCHUB",
     };
 
+    /// <summary>Where the system's own programs live. Of these, PCHUB only ever ends the runtimes AI apps run on.</summary>
+    private static readonly string[] SystemProgramRoots = ["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/lib", "/lib", "/usr/lib64", "/lib64", "/usr/libexec"];
+
+    /// <summary>Program names in system folders that AI apps run on (a venv's python is really /usr/bin/python3.x).</summary>
+    private static bool IsAppRuntime(string name) =>
+        name.StartsWith("python", StringComparison.Ordinal) || name is "node" or "java" or "ollama" or "uv" or "deno" or "bun";
+
+    private static readonly string[] ProtectedPrefixes = ["gnome-", "xdg-desktop-portal", "kwin", "plasma", "xfce4-", "gvfs", "at-spi", "ibus", "fcitx"];
+
     private static readonly HashSet<string> NeverInherited = new(StringComparer.Ordinal)
     {
+        "bash", "sh", "dash", "zsh", "fish", "tmux", "screen", "ssh-agent", "gpg-agent", "gnome-keyring-daemon", "ssh",
         "firefox", "firefox-bin", "chrome", "chromium", "chromium-browser", "brave", "opera", "vivaldi-bin", "msedge", "librewolf", "epiphany",
         "gnome-terminal-server", "konsole", "xterm", "kitty", "alacritty", "wezterm-gui", "tilix", "xfce4-terminal", "ptyxis",
         "nautilus", "dolphin", "thunar", "nemo", "code", "xdg-open", "gio", "kde-open", "kde-open5", "gnome-text-editor", "gedit", "kate",
@@ -480,9 +643,18 @@ internal sealed class LinuxPlatform : IPlatform
         return parent is "/mnt" || parent == Path.Combine("/media", user) || parent == Path.Combine("/run/media", user);
     }
 
-    public bool IsProtected(ProcInfo p, IReadOnlySet<int> selfAndAncestors) =>
-        p.Pid <= 2 || selfAndAncestors.Contains(p.Pid) || ProtectedNames.Contains(p.Name) ||
-        (p.Path is { } path && DaemonRoots.Any(r => PathSafety.IsUnder(path, r)));
+    /// <summary>
+    /// Never ended: PCHUB itself and its parents, the desktop's own programs, anything whose program file can't be
+    /// read (so it can't be identified), and system programs other than the runtimes AI apps use.
+    /// </summary>
+    public bool IsProtected(ProcInfo p, IReadOnlySet<int> selfAndAncestors)
+    {
+        if (p.Pid <= 2 || selfAndAncestors.Contains(p.Pid) || ProtectedNames.Contains(p.Name)) return true;
+        if (ProtectedPrefixes.Any(x => p.Name.StartsWith(x, StringComparison.Ordinal))) return true;
+        if (p.Path is not { } path) return true;
+        if (DaemonRoots.Any(r => PathSafety.IsUnder(path, r))) return true;
+        return SystemProgramRoots.Any(r => PathSafety.IsUnder(path, r)) && !IsAppRuntime(p.Name);
+    }
 
     /// <summary>
     /// Whether a child process may belong to its parent's app. Browsers, terminals, file managers and editors the
@@ -491,6 +663,7 @@ internal sealed class LinuxPlatform : IPlatform
     public bool CanInherit(ProcInfo p)
     {
         if (NeverInherited.Contains(p.Name) || ProtectedNames.Contains(p.Name)) return false;
+        if (ProtectedPrefixes.Any(x => p.Name.StartsWith(x, StringComparison.Ordinal))) return false;
         if (p.Path is { } path)
         {
             if (path.Contains("firefox", StringComparison.OrdinalIgnoreCase) || path.Contains("chrom", StringComparison.OrdinalIgnoreCase)) return false;
@@ -522,17 +695,30 @@ internal sealed class LinuxPlatform : IPlatform
     // ---------------- secrets ----------------
     // The desktop keyring (GNOME Keyring / KWallet through the Secret Service) via secret-tool when it's
     // installed. Without it, a file only this user can read (mode 600), like most Linux command-line tools use.
+    // A marker file (no secret in it) records which of the two holds the key, so checking "is a key saved?"
+    // never has to ask the keyring, which could pop up an unlock prompt.
 
-    private const string SecretToolPath = "/usr/bin/secret-tool";
     private static readonly string[] SecretAttrs = ["service", "PCHUB", "account", "claude-api-key"];
     private static string KeyFile => Path.Combine(AppPaths.Data, "claude-api-key");
-    private bool? _hasSecret;
+    private static string KeyringMarker => Path.Combine(AppPaths.Data, "claude-api-key.in-keyring");
+
+    /// <summary>secret-tool from the PATH (it lives in /usr/bin on most distros, elsewhere on NixOS and others).</summary>
+    private static string? SecretTool()
+    {
+        foreach (string dir in (Environment.GetEnvironmentVariable("PATH") ?? "/usr/bin:/bin").Split(':', StringSplitOptions.RemoveEmptyEntries).Append("/usr/bin"))
+        {
+            string p = Path.Combine(dir, "secret-tool");
+            if (Path.IsPathFullyQualified(p) && File.Exists(p)) return p;
+        }
+
+        return null;
+    }
 
     public string? LoadSecret(AppSettings settings)
     {
-        if (File.Exists(SecretToolPath) && RunSecretTool(["lookup", .. SecretAttrs], null, out string output) && output.Trim() is { Length: > 0 } fromKeyring)
+        if (File.Exists(KeyringMarker))
         {
-            return fromKeyring;
+            return SecretTool() is { } tool && RunSecretTool(tool, ["lookup", .. SecretAttrs], null, out string output) && output.Trim() is { Length: > 0 } k ? k : null;
         }
 
         try
@@ -545,54 +731,67 @@ internal sealed class LinuxPlatform : IPlatform
         }
     }
 
-    /// <summary>Checked once, then remembered (asking the keyring on every screen refresh could pop up an unlock prompt).</summary>
-    public bool HasSecret(AppSettings settings) => _hasSecret ??= LoadSecret(settings) is not null;
+    public bool HasSecret(AppSettings settings) => File.Exists(KeyringMarker) || File.Exists(KeyFile);
 
     public bool SaveSecret(AppSettings settings, string? secret)
     {
-        bool ok;
+        string? tool = SecretTool();
         if (string.IsNullOrWhiteSpace(secret))
         {
-            if (File.Exists(SecretToolPath)) RunSecretTool(["clear", .. SecretAttrs], null, out _);
-            ok = DeleteKeyFile();
-            _hasSecret = ok ? false : null;
-            return ok;
+            if (tool is not null) RunSecretTool(tool, ["clear", .. SecretAttrs], null, out _);
+            return DeleteFile(KeyringMarker) & DeleteFile(KeyFile);
         }
 
         string key = secret.Trim();
-        if (File.Exists(SecretToolPath) && RunSecretTool(["store", "--label=PCHUB Claude API key", .. SecretAttrs], key, out _))
+        if (tool is not null && RunSecretTool(tool, ["store", "--label=PCHUB Claude API key", .. SecretAttrs], key, out _) && WritePrivate(KeyringMarker, ""))
         {
-            DeleteKeyFile(); // the keyring has it now; don't leave a second copy
-            _hasSecret = true;
+            DeleteFile(KeyFile); // the keyring has it now; don't leave a second copy
             return true;
         }
 
-        ok = WriteKeyFile(key);
-        _hasSecret = ok ? true : null;
-        return ok;
+        // Keyring missing or refused: make sure an older keyring copy can't win over the new key.
+        if (tool is not null) RunSecretTool(tool, ["clear", .. SecretAttrs], null, out _);
+        DeleteFile(KeyringMarker);
+
+        // Never put the key in a shared temp folder (PCHUB falls back to one if its data folder can't be made).
+        if (PathSafety.IsUnder(PathSafety.Norm(AppPaths.Data), PathSafety.Norm(Path.GetTempPath()))) return false;
+        return WritePrivate(KeyFile, key);
     }
 
-    private static bool WriteKeyFile(string key)
+    /// <summary>Writes a file that only this user can read (created 0600, then moved into place atomically).</summary>
+    private static bool WritePrivate(string path, string content)
     {
+        string tmp = path + ".tmp";
         try
         {
-            // Create it private before the key goes in, so it is never readable by others even briefly.
-            using (File.Create(KeyFile)) { }
-            if (LinuxNative.Chmod(KeyFile, 0b110_000_000) != 0) return false; // 0600
-            File.WriteAllText(KeyFile, key);
+            File.Delete(tmp);
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            };
+            using (var fs = new FileStream(tmp, options))
+            using (var w = new StreamWriter(fs))
+            {
+                w.Write(content);
+            }
+
+            File.Move(tmp, path, overwrite: true);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            DeleteFile(tmp);
             return false;
         }
     }
 
-    private static bool DeleteKeyFile()
+    private static bool DeleteFile(string path)
     {
         try
         {
-            if (File.Exists(KeyFile)) File.Delete(KeyFile);
+            if (File.Exists(path)) File.Delete(path);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -602,12 +801,12 @@ internal sealed class LinuxPlatform : IPlatform
     }
 
     /// <summary>Runs secret-tool with a timeout. The secret goes in on stdin, never on the command line.</summary>
-    private static bool RunSecretTool(string[] args, string? stdin, out string stdout)
+    private static bool RunSecretTool(string tool, string[] args, string? stdin, out string stdout)
     {
         stdout = "";
         try
         {
-            var psi = new ProcessStartInfo(SecretToolPath)
+            var psi = new ProcessStartInfo(tool)
             {
                 UseShellExecute = false,
                 RedirectStandardInput = true,

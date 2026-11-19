@@ -36,7 +36,8 @@ chmod +x "$DESKTOP"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPS" >/dev/null 2>&1 || true
 
 echo "PCHUB is in your app menu now."
-if ! ldconfig -p 2>/dev/null | grep -q "libwebkit2gtk-4\.[01]"; then
+LDCONFIG=$(command -v ldconfig || echo /sbin/ldconfig)
+if ! "$LDCONFIG" -p 2>/dev/null | grep -q "libwebkit2gtk-4\.[01]"; then
     echo
     echo "To show apps like ComfyUI inside PCHUB, also install WebKitGTK:"
     echo "  Ubuntu, Debian, Mint:  sudo apt install libwebkit2gtk-4.1-0"

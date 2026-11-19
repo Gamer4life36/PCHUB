@@ -221,7 +221,7 @@ public sealed class StoreViewModel : ObservableObject
                 "After each download, PCHUB sends the app's README and the parts of its files that matter for safety (scripts that download or run things, " +
                 "hidden code, password or wallet access) and for age-gating to Anthropic's Claude. " +
                 "Claude reports safety red flags, legal red flags, and whether the app has its own age gate." + Environment.NewLine + Environment.NewLine +
-                "• Uses your own Anthropic API key (stored encrypted on this PC)." + Environment.NewLine +
+                "• Uses your own Anthropic API key (" + ClaudeKey.WhereStored + ")." + Environment.NewLine +
                 "• Costs roughly $0.05–$0.15 per check, billed to your Anthropic account." + Environment.NewLine +
                 "• Red flags or a missing age gate show as a warning and are noted in History." + Environment.NewLine +
                 "• The scan reads excerpts and can't guarantee a file is safe or legal; you stay responsible for what you use.",
@@ -246,13 +246,14 @@ public sealed class StoreViewModel : ObservableObject
         if (Ui.Dialogs is null) return false;
         string? key = await Ui.Dialogs.AskApiKeyAsync();
         if (key is null) return false;
+        // Off the UI thread: the Keychain or Linux keyring may wait on an unlock prompt.
         if (key.Length == 0)
         {
-            ClaudeKey.Save(_settings, null);
+            await Task.Run(() => ClaudeKey.Save(_settings, null));
             _settings.ClaudeAgeCheck = false;
             Raise(nameof(ClaudeAgeCheck));
         }
-        else if (!ClaudeKey.Save(_settings, key))
+        else if (!await Task.Run(() => ClaudeKey.Save(_settings, key)))
         {
             Status = "The system couldn't store the key securely for this account, so it wasn't saved.";
             return false;

@@ -29,8 +29,44 @@ internal static partial class LinuxNative
     [LibraryImport(LibC, EntryPoint = "setxattr", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
     private static unsafe partial int SetXattr(string path, string name, byte* value, nuint size, int flags);
 
-    [LibraryImport(LibC, EntryPoint = "chmod", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
-    public static partial int Chmod(string path, uint mode);
+    [LibraryImport(LibC, EntryPoint = "syscall", SetLastError = true)]
+    private static partial long Syscall2(long number, long a, long b);
+
+    [LibraryImport(LibC, EntryPoint = "syscall", SetLastError = true)]
+    private static partial long Syscall4(long number, long a, long b, long c, long d);
+
+    [LibraryImport(LibC, EntryPoint = "close")]
+    private static partial int CloseFd(int fd);
+
+    // The same numbers on x86-64 and arm64 (both use the generic table for these newer calls).
+    private const long SysPidfdOpen = 434;
+    private const long SysPidfdSendSignal = 424;
+
+    /// <summary>
+    /// A handle that stays tied to this exact process even if it exits and its PID is reused (Linux 5.3+).
+    /// -1 when the kernel is older or the process is gone.
+    /// </summary>
+    public static int PidfdOpen(int pid)
+    {
+        if (pid <= 1) return -1;
+        try
+        {
+            long fd = Syscall2(SysPidfdOpen, pid, 0);
+            return fd is >= 0 and <= int.MaxValue ? (int)fd : -1;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return -1;
+        }
+    }
+
+    /// <summary>Signals the process behind a pidfd; fails (instead of hitting a stranger) if it already exited.</summary>
+    public static bool PidfdSendSignal(int fd, int signal) => Syscall4(SysPidfdSendSignal, fd, signal, 0, 0) == 0;
+
+    public static void Close(int fd)
+    {
+        if (fd >= 0) _ = CloseFd(fd);
+    }
 
     private static readonly long ClockTicks = TicksPerSecond();
     private static readonly DateTime? BootTimeUtc = ReadBootTime();

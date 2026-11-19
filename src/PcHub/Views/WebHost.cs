@@ -64,19 +64,23 @@ public sealed class WebHost
         }
     }
 
-    /// <summary>Linux needs the WebKitGTK system library (libwebkit2gtk-4.1), which most desktops already have.</summary>
+    /// <summary>
+    /// Linux needs the WebKitGTK system library (libwebkit2gtk-4.1), which most desktops already have. Checked by
+    /// looking for the file, not by loading it, so GTK isn't started inside PCHUB before a tab needs it.
+    /// </summary>
     private static bool WebKitGtkInstalled()
     {
-        foreach (string lib in new[] { "libwebkit2gtk-4.1.so.0", "libwebkit2gtk-4.0.so.37" })
+        string[] dirs = ["/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu", "/usr/lib64", "/usr/lib", "/lib/x86_64-linux-gnu", "/lib/aarch64-linux-gnu", "/lib64", "/lib"];
+        foreach (string dir in dirs)
         {
-            if (System.Runtime.InteropServices.NativeLibrary.TryLoad(lib, out nint h))
+            foreach (string lib in new[] { "libwebkit2gtk-4.1.so.0", "libwebkit2gtk-4.0.so.37" })
             {
-                System.Runtime.InteropServices.NativeLibrary.Free(h);
-                return true;
+                if (File.Exists(Path.Combine(dir, lib))) return true;
             }
         }
 
-        return false;
+        // Unusual layouts (NixOS, Flatpak runtimes): let the control try rather than refuse.
+        return !dirs.Any(Directory.Exists);
     }
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
