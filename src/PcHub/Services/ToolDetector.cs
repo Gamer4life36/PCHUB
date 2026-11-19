@@ -4,7 +4,7 @@ namespace PcHub.Services;
 
 /// <summary>
 /// Finds common local-AI apps: the platform's fixed install locations, plus a shallow (2-level) look through
-/// the drives / home folder for known folder layouts. Works on Windows and macOS. It only reads directory
+/// the drives / home folder for known folder layouts. Works on Windows, macOS and Linux. It only reads directory
 /// listings; nothing is started or changed.
 /// </summary>
 public static class ToolDetector
@@ -18,7 +18,9 @@ public static class ToolDetector
         // macOS
         "Library", "System", "Applications", "Volumes", "private", "usr", "bin", "sbin", "cores", "dev", "etc", "opt", "tmp", "var",
         ".Trash", "Movies", "Music", "Pictures", "Public",
-        // both
+        // Linux
+        "proc", "sys", "snap", "boot", "run", "lost+found", "srv", "flatpak",
+        // all
         "node_modules", ".git", ".cache", ".npm",
     };
 
@@ -120,14 +122,14 @@ public static class ToolDetector
 
         if (HasDir("src") && Has(Path.Combine("src", "SwarmUI.csproj")))
         {
-            string script = os.IsWindows ? "launch-windows.bat" : "launch-macos.sh";
+            string script = os.IsWindows ? "launch-windows.bat" : os.IsLinux ? "launch-linux.sh" : "launch-macos.sh";
             if (Has(script)) found.Add(ScriptTool(os, "SwarmUI", d, script, 7801));
             return;
         }
 
         if (Has("server.py") && HasDir("modules"))
         {
-            string script = os.IsWindows ? "start_windows.bat" : "start_macos.sh";
+            string script = os.IsWindows ? "start_windows.bat" : os.IsLinux ? "start_linux.sh" : "start_macos.sh";
             if (Has(script)) found.Add(ScriptTool(os, "Text Generation WebUI", d, script, 7860));
             return;
         }
@@ -149,7 +151,7 @@ public static class ToolDetector
     /// <summary>KoboldCpp is a single file that often sits in Downloads, so match the file, not the folder.</summary>
     private static void DetectKobold(IPlatform os, string d, List<ToolDefinition> found)
     {
-        string pattern = os.IsWindows ? "koboldcpp*.exe" : "koboldcpp-mac*";
+        string pattern = os.IsWindows ? "koboldcpp*.exe" : os.IsLinux ? "koboldcpp-linux*" : "koboldcpp-mac*";
         foreach (string exe in Directory.EnumerateFiles(d, pattern))
         {
             found.Add(new ToolDefinition
@@ -167,7 +169,7 @@ public static class ToolDetector
         Name = name,
         FileName = Path.Combine(dir, script),
         WorkingDirectory = dir,
-        // macOS has no console window to show, so script output always goes to a log there.
+        // macOS and Linux have no console window to show, so script output always goes to a log there.
         Hidden = !os.IsWindows,
         MatchPaths = [dir],
         Port = port,

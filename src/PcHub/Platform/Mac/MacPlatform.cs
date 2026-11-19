@@ -117,6 +117,7 @@ internal sealed class MacPlatform : IPlatform
     public string OsName => "macOS";
     public bool IsWindows => false;
     public bool IsMac => true;
+    public bool IsLinux => false;
 
     // APFS volumes are case-insensitive by default; matching that way is the safe choice for "is this inside that folder".
     public StringComparison PathComparison => StringComparison.OrdinalIgnoreCase;

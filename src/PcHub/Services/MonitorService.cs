@@ -230,6 +230,21 @@ public sealed class MonitorService : IDisposable
                 }
             }
 
+            // A system Python (Linux: /usr/bin/python3.x, the real file behind a venv) running inside a tool's
+            // folder belongs to that tool. Only interpreters qualify, never shells or terminals sitting there.
+            if (best is null && p.Cwd is { } cwd)
+            {
+                foreach (var t in tools)
+                {
+                    int score = FolderScore(t, cwd);
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        best = t.Id;
+                    }
+                }
+            }
+
             if (best is not null) owner[p.Pid] = best;
         }
 
@@ -273,6 +288,19 @@ public sealed class MonitorService : IDisposable
         }
 
         return owner;
+    }
+
+    /// <summary>Length of the most specific tool folder that is, or contains, this folder; 0 if none.</summary>
+    private static int FolderScore(ToolDefinition t, string folder)
+    {
+        int best = 0;
+        foreach (string f in t.MatchPaths)
+        {
+            if (f.Length <= best) continue;
+            if (PathSafety.Norm(folder).Equals(PathSafety.Norm(f), Os.Current.PathComparison) || PathSafety.IsUnder(folder, f)) best = f.Length;
+        }
+
+        return best;
     }
 
     /// <summary>0 = not this tool's; exact file beats folder; a longer (more specific) folder beats a shorter one.</summary>

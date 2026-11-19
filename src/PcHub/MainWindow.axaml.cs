@@ -40,6 +40,15 @@ public partial class MainWindow : Window, IDialogs
 
     private void ShowRuntime(bool ok)
     {
+        if (!ok && Os.Current.IsLinux)
+        {
+            // Linux: the system's WebKitGTK library; nothing to download from a web page.
+            RuntimeTitle.Text = "Showing apps inside PCHUB needs WebKitGTK";
+            RuntimeText.Text = "Install it with your package manager, then restart PCHUB. Ubuntu, Debian, Mint: sudo apt install libwebkit2gtk-4.1-0 · " +
+                               "Fedora: sudo dnf install webkit2gtk4.1 · Arch: sudo pacman -S webkit2gtk-4.1. Or open this app in your browser instead.";
+            RuntimeButton.IsVisible = false;
+        }
+
         WaitingPanel.IsVisible = ok;
         RuntimeMissingPanel.IsVisible = !ok;
     }
@@ -90,6 +99,8 @@ public partial class MainWindow : Window, IDialogs
     {
         var types = Os.Current.IsMac
             ? new[] { new FilePickerFileType("Apps and programs") { Patterns = ["*.app", "*.sh", "*"] } }
+            : Os.Current.IsLinux
+            ? new[] { new FilePickerFileType("Programs and scripts") { Patterns = ["*.AppImage", "*.appimage", "*.sh", "*"] } }
             : new[]
             {
                 new FilePickerFileType("Programs and launchers") { Patterns = ["*.exe", "*.bat", "*.cmd", "*.vbs"] },

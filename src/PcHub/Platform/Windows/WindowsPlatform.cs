@@ -75,6 +75,7 @@ internal sealed class WindowsPlatform : IPlatform
     public string OsName => "Windows";
     public bool IsWindows => true;
     public bool IsMac => false;
+    public bool IsLinux => false;
     public StringComparison PathComparison => StringComparison.OrdinalIgnoreCase;
 
     public IGpuMonitor CreateGpuMonitor(AppSettings settings) => new WindowsGpuMonitor(settings.AdapterLuid);

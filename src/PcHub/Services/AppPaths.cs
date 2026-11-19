@@ -5,7 +5,7 @@ namespace PcHub.Services;
 ///  1. Portable mode: a file named "portable" next to PCHUB.exe → data\ beside the exe (USB sticks, other drives).
 ///  2. Dev builds (running inside the source tree) → &lt;repo&gt;\data.
 ///  3. Otherwise the standard per-user folder: %LOCALAPPDATA%\PCHUB on Windows,
-///     ~/Library/Application Support/PCHUB on macOS.
+///     ~/Library/Application Support/PCHUB on macOS, ~/.local/share/PCHUB (XDG_DATA_HOME) on Linux.
 /// </summary>
 public static class AppPaths
 {

@@ -36,10 +36,11 @@ public sealed record CatalogApp(
     DateTime? Updated = null,
     bool Recommended = false,
     bool OnWindows = true,
-    bool OnMac = true)
+    bool OnMac = true,
+    bool OnLinux = true)
 {
     /// <summary>Available on the system PCHUB is running on.</summary>
-    public bool OnThisOs => OperatingSystem.IsMacOS() ? OnMac : OnWindows;
+    public bool OnThisOs => OperatingSystem.IsMacOS() ? OnMac : OperatingSystem.IsLinux() ? OnLinux : OnWindows;
 }
 
 /// <summary>The exact file a download will fetch, shown to the user before anything is downloaded.</summary>
@@ -183,13 +184,15 @@ public static partial class AppCatalog
         if (pick is var (rel, best) && best is not null)
         {
             string? sha = best.Digest is { } d && d.Length == 71 && d.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) && d[7..].All(char.IsAsciiHexDigit) ? d[7..] : null;
-            return new DownloadChoice(best.DownloadUrl!, SafeFileName(best.Name!), best.Size, sha, $"{(OperatingSystem.IsMacOS() ? "Mac" : "Windows")} release {rel.TagName}".Trim());
+            return new DownloadChoice(best.DownloadUrl!, SafeFileName(best.Name!), best.Size, sha, $"{OsWord} release {rel.TagName}".Trim());
         }
 
         string name = repo.Replace('/', '-') + "-source.zip";
         return new DownloadChoice($"https://api.github.com/repos/{repo}/zipball", name, null, null,
-            (OperatingSystem.IsMacOS() ? "Source code (no Mac download published; see the project's install guide)" : "Source code (no Windows installer published; see the project's install guide)"));
+            $"Source code (no {OsWord} download published; see the project's install guide)");
     }
+
+    private static string OsWord => OperatingSystem.IsMacOS() ? "Mac" : OperatingSystem.IsLinux() ? "Linux" : "Windows";
 
     private static async Task<List<GhRelease>> GetReleasesAsync(string url, bool single, CancellationToken ct)
     {
@@ -230,7 +233,49 @@ public static partial class AppCatalog
 
     /// <summary>Picks the scoring rules for the system PCHUB is running on.</summary>
     private static int Score(string name, string gpu) =>
-        OperatingSystem.IsMacOS() ? ScoreMac(name) : ScoreWindows(name, gpu);
+        OperatingSystem.IsMacOS() ? ScoreMac(name) : OperatingSystem.IsLinux() ? ScoreLinux(name, gpu) : ScoreWindows(name, gpu);
+
+    /// <summary>
+    /// Higher is better; 0 means "not a Linux download". Prefers AppImages (run anywhere, no install), then
+    /// archives tagged for Linux, then .deb/.rpm packages; matches the CPU (x86-64 or ARM) and the GPU maker.
+    /// </summary>
+    private static int ScoreLinux(string name, string gpu)
+    {
+        string n = name.ToLowerInvariant();
+        var tokens = n.Split(['-', '_', '.', ' ', '+'], StringSplitOptions.RemoveEmptyEntries);
+        string[] wrongOsTokens = ["windows", "win", "win64", "win32", "mac", "macos", "darwin", "osx", "apple", "android", "ios"];
+        string[] wrongEndings = [".exe", ".msi", ".bat", ".cmd", ".dmg", ".pkg", ".sha256", ".sig", ".asc", ".txt", ".json", ".yml", ".yaml", ".blockmap", ".whl", ".zsync"];
+        if (tokens.Any(t => wrongOsTokens.Contains(t)) || wrongEndings.Any(e => n.EndsWith(e, StringComparison.Ordinal))) return 0;
+
+        bool linuxTagged = tokens.Any(t => t is "linux" or "ubuntu" or "debian" or "appimage" or "deb" or "rpm");
+        int score = n switch
+        {
+            _ when n.EndsWith(".appimage", StringComparison.Ordinal) => 60,
+            _ when (n.EndsWith(".tar.gz", StringComparison.Ordinal) || n.EndsWith(".tgz", StringComparison.Ordinal) || n.EndsWith(".tar.xz", StringComparison.Ordinal)) && linuxTagged => 45,
+            _ when n.EndsWith(".zip", StringComparison.Ordinal) && linuxTagged => 40,
+            _ when n.EndsWith(".deb", StringComparison.Ordinal) => 40,
+            _ when n.EndsWith(".rpm", StringComparison.Ordinal) => 30,
+            _ when !n.Contains('.') && linuxTagged => 35, // single-file Linux programs (e.g. koboldcpp-linux-x64)
+            _ => 0,
+        };
+        if (score == 0) return 0;
+        if (linuxTagged) score += 20;
+
+        bool arm = n.Contains("arm64") || n.Contains("aarch64");
+        bool weAreArm = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64;
+        if (arm != weAreArm) return 0;
+
+        string n2 = n.Replace("amd64", "", StringComparison.Ordinal).Replace("nocuda", "cpu", StringComparison.Ordinal);
+        string? vendor = n2.Contains("nvidia") || n2.Contains("cuda") || System.Text.RegularExpressions.Regex.IsMatch(n2, @"(^|[-_.])cu1\d")
+            ? "nvidia"
+            : n2.Contains("rocm") || n2.Contains("amd") ? "amd"
+            : n2.Contains("intel") || n2.Contains("xpu") ? "intel"
+            : null;
+        if (vendor is not null) score += vendor == gpu ? 15 : -25;
+        if (n2.Contains("cpu")) score += gpu == "none" ? 10 : -5;
+        if (n.Contains("debug") || n.Contains("symbols")) score -= 40;
+        return Math.Max(score, 0);
+    }
 
     /// <summary>
     /// Higher is better; 0 means "not a Mac download". Prefers disk images and Mac zips that match the Mac's chip
@@ -312,6 +357,35 @@ public static partial class AppCatalog
         if (n.Contains("debug") || n.Contains("symbols") || n.Contains("pdb")) score -= 40;
         return Math.Max(score, 0);
     }
+    /// <summary>~/Documents, or the folder the Linux desktop calls Documents (XDG user-dirs, e.g. a translated name).</summary>
+    private static string UnixDocuments(string home)
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                string cfg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME") is { Length: > 0 } x ? x : Path.Combine(home, ".config");
+                string dirs = Path.Combine(cfg, "user-dirs.dirs");
+                if (File.Exists(dirs))
+                {
+                    foreach (string line in File.ReadLines(dirs))
+                    {
+                        if (!line.StartsWith("XDG_DOCUMENTS_DIR=", StringComparison.Ordinal)) continue;
+                        string v = line["XDG_DOCUMENTS_DIR=".Length..].Trim().Trim('"').Replace("$HOME", home, StringComparison.Ordinal);
+                        // "$HOME/" alone means the desktop has no Documents folder.
+                        if (Path.IsPathFullyQualified(v) && PathSafety.Norm(v) != PathSafety.Norm(home)) return v;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Fall back to ~/Documents.
+            }
+        }
+
+        return Path.Combine(home, "Documents");
+    }
+
     private const long MaxDownloadBytes = 25L * 1024 * 1024 * 1024; // 25 GB hard cap
     private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(60);
 
@@ -471,8 +545,8 @@ public static partial class AppCatalog
             string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             foreach (string baseDir in new[]
             {
-                // On macOS .NET maps MyDocuments to the home folder, so use ~/Documents there.
-                OperatingSystem.IsMacOS() ? Path.Combine(home, "Documents") : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                // On macOS and Linux .NET maps MyDocuments to the home folder, so use the real Documents folder there.
+                OperatingSystem.IsWindows() ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : UnixDocuments(home),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             })

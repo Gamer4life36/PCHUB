@@ -46,7 +46,8 @@ YOUR RESPONSIBILITY
 Requirements
 - Windows 10 (version 1809 or newer) or Windows 11, 64-bit.
 - Nothing else to install: .NET is built in.
-- A Mac version (macOS 13 or newer, Apple Silicon or Intel) is on the GitHub Releases page.
+- Mac (macOS 13 or newer, Apple Silicon or Intel) and Linux (64-bit, x86-64 or ARM) versions are on
+  the GitHub Releases page: https://github.com/Gamer4life36/PCHUB/releases
 
 Install
 - Unzip anywhere and run PCHUB.exe.

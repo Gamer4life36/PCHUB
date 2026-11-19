@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 namespace PcHub.Platform.Windows;
 
 /// <summary>
-/// Minimal P/Invoke surface for NVIDIA's NVML (nvml.dll ships with the driver in System32).
+/// Minimal P/Invoke surface for NVIDIA's NVML (nvml.dll on Windows, libnvidia-ml.so.1 on Linux; both ship with the driver).
 /// Reading through NVML costs microseconds, versus ~100 ms to spawn nvidia-smi.
 /// </summary>
 internal static unsafe partial class Nvml
@@ -74,14 +74,45 @@ internal static unsafe partial class Nvml
     [LibraryImport(Lib, EntryPoint = "nvmlErrorString")]
     public static partial nint ErrorString(int result);
 
+    /// <summary>nvmlProcessInfo_t as used by the _v3 process queries (24 bytes: pid, padding, memory, two ids).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ProcessInfo
+    {
+        public uint Pid;
+        public ulong UsedGpuMemory;
+        public uint GpuInstanceId;
+        public uint ComputeInstanceId;
+    }
+
+    public const int InsufficientSize = 7;
+
+    /// <summary>Per-process VRAM on Linux (Windows reports it through its own GPU counters instead).</summary>
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetComputeRunningProcesses_v3")]
+    public static partial int DeviceGetComputeRunningProcesses(nint device, ref uint count, ProcessInfo* infos);
+
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetGraphicsRunningProcesses_v3")]
+    public static partial int DeviceGetGraphicsRunningProcesses(nint device, ref uint count, ProcessInfo* infos);
+
+    private static bool _resolverSet;
+
     /// <summary>
-    /// Modern (DCH) drivers put nvml.dll in System32; older ones only in NVSMI under Program Files.
-    /// Call once at startup. Only those two trusted locations are tried.
+    /// Windows: modern (DCH) drivers put nvml.dll in System32; older ones only in NVSMI under Program Files.
+    /// Linux: libnvidia-ml.so.1 from the driver, found through the system's library path.
+    /// Call once at startup. Only those trusted locations are tried.
     /// </summary>
-    public static void RegisterResolver() =>
+    public static void RegisterResolver()
+    {
+        if (_resolverSet) return;
+        _resolverSet = true;
         NativeLibrary.SetDllImportResolver(typeof(Nvml).Assembly, (name, _, _) =>
         {
             if (!name.Equals(Lib, StringComparison.OrdinalIgnoreCase)) return 0;
+            if (OperatingSystem.IsLinux())
+            {
+                return NativeLibrary.TryLoad("libnvidia-ml.so.1", out nint lh) ? lh : 0;
+            }
+
+            if (!OperatingSystem.IsWindows()) return 0;
             string[] candidates =
             [
                 Path.Combine(Environment.SystemDirectory, Lib),
@@ -94,6 +125,7 @@ internal static unsafe partial class Nvml
 
             return 0;
         });
+    }
 
     public static string Describe(int result)
     {

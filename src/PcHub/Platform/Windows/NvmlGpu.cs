@@ -67,7 +67,9 @@ public sealed unsafe class NvmlGpu : IDisposable
         }
         catch (DllNotFoundException)
         {
-            gpu.Error = "nvml.dll not found. Is the NVIDIA driver installed?";
+            gpu.Error = OperatingSystem.IsLinux()
+                ? "libnvidia-ml.so.1 not found. Is the NVIDIA driver (not nouveau) installed?"
+                : "nvml.dll not found. Is the NVIDIA driver installed?";
         }
         catch (EntryPointNotFoundException ex)
         {
@@ -75,7 +77,7 @@ public sealed unsafe class NvmlGpu : IDisposable
         }
         catch (BadImageFormatException)
         {
-            gpu.Error = "nvml.dll doesn't match this Windows (32/64-bit). Reinstall the NVIDIA driver.";
+            gpu.Error = "The NVIDIA library doesn't match this system (32/64-bit or ARM). Reinstall the NVIDIA driver.";
         }
 
         return gpu;
@@ -102,6 +104,62 @@ public sealed unsafe class NvmlGpu : IDisposable
         int? memClock = Nvml.DeviceGetClockInfo(_device, Nvml.ClockMemory, out uint m) == Nvml.Success ? (int)m : null;
 
         return new GpuSample(mem.Used, mem.Total, load, temp, power, limit, fan, core, memClock);
+    }
+
+    /// <summary>
+    /// VRAM per process from the driver (used on Linux). Compute (CUDA) and graphics users are merged.
+    /// Null when the driver doesn't support the query.
+    /// </summary>
+    public Dictionary<int, ulong>? ReadProcesses()
+    {
+        if (!Available || _noProcessQuery) return null;
+        var result = new Dictionary<int, ulong>();
+        try
+        {
+            Collect(compute: true, result);
+            Collect(compute: false, result);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            _noProcessQuery = true; // driver older than 510
+            return null;
+        }
+
+        return result;
+    }
+
+    private bool _noProcessQuery;
+
+    private void Collect(bool compute, Dictionary<int, ulong> into)
+    {
+        uint count = 64;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            var buf = new Nvml.ProcessInfo[count];
+            uint n = count;
+            int r;
+            fixed (Nvml.ProcessInfo* p = buf)
+            {
+                r = compute ? Nvml.DeviceGetComputeRunningProcesses(_device, ref n, p) : Nvml.DeviceGetGraphicsRunningProcesses(_device, ref n, p);
+            }
+
+            if (r == Nvml.InsufficientSize)
+            {
+                count = Math.Max(n, count * 2) + 8; // more processes appeared; grow and retry
+                continue;
+            }
+
+            if (r != Nvml.Success) return;
+            for (int i = 0; i < n && i < buf.Length; i++)
+            {
+                // NVML_VALUE_NOT_AVAILABLE (all ones) when the driver can't attribute memory to the process.
+                ulong used = buf[i].UsedGpuMemory == ulong.MaxValue ? 0 : buf[i].UsedGpuMemory;
+                int pid = (int)buf[i].Pid;
+                into[pid] = Math.Max(into.GetValueOrDefault(pid), used);
+            }
+
+            return;
+        }
     }
 
     public void Dispose()

@@ -10,7 +10,8 @@
     <RootNamespace>PcHub</RootNamespace>
     <AssemblyName>PCHUB</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.2.0</Version>
+    <ApplicationIcon>Assets\pchub.ico</ApplicationIcon>
+    <Version>0.3.0</Version>
     <Product>PCHUB</Product>
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
 
@@ -36,6 +37,12 @@
     <!-- Windows-only helpers (used only when running on Windows). -->
     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="10.0.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Icons drawn by packaging/icon/make_icon.py -->
+    <AvaloniaResource Include="Assets\pchub.ico" />
+    <AvaloniaResource Include="Assets\pchub-256.png" />
   </ItemGroup>
 
   <!-- Release publish: precompiled native code (ReadyToRun) for fast start. -->

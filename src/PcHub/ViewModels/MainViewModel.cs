@@ -61,7 +61,7 @@ public sealed class MainViewModel : ObservableObject
 
         if (!gpu.HasSensors)
         {
-            string why = Os.Current.IsMac ? "not shared by macOS" : "needs an NVIDIA card";
+            string why = Os.Current.IsMac ? "not shared by macOS" : Os.Current.IsLinux ? "not reported by this driver" : "needs an NVIDIA card";
             _temp = "n/a";
             _tempSub = why;
             _power = "n/a";
@@ -465,7 +465,9 @@ public sealed class MainViewModel : ObservableObject
     public string DrivesTitle => Os.Current.CanOptimizeDrives ? "Drives & fragmentation" : "Drives";
     public string DrivesFootnote => Os.Current.CanOptimizeDrives
         ? "Blocks are drawn to scale from Windows' last drive analysis: blue = used, orange = fragmented, flat = free."
-        : "Blocks are drawn to scale: blue = used, flat = free. macOS looks after its SSDs itself, so there's nothing to defragment.";
+        : Os.Current.IsMac
+            ? "Blocks are drawn to scale: blue = used, flat = free. macOS looks after its SSDs itself, so there's nothing to defragment."
+            : "Blocks are drawn to scale: blue = used, flat = free. Linux file systems keep themselves in order, so there's nothing to defragment.";
     public string ProcessesTitle => _gpu.PerProcessIsGpuMemory ? "Using the GPU" : "Biggest memory users";
     public string ProcessesColumn => _gpu.PerProcessIsGpuMemory ? _gpu.MemoryLabel : "RAM";
     public string MemoryLabel => _gpu.MemoryLabel;
@@ -915,8 +917,8 @@ public sealed class MainViewModel : ObservableObject
             def.FileName = program;
         }
 
-        // macOS has no console window to show, so scripts always log to a file there.
-        if (Os.Current.IsMac && ext == ".sh") def.Hidden = true;
+        // macOS and Linux have no console window to show, so scripts always log to a file there.
+        if (!Os.Current.IsWindows && ext == ".sh") def.Hidden = true;
 
         if (isBundle)
         {
@@ -927,7 +929,7 @@ public sealed class MainViewModel : ObservableObject
         {
             // A program sitting in a shared folder (Downloads, Desktop, a drive root) is matched by file only,
             // so PCHUB never claims unrelated programs that happen to live beside it.
-            bool singleProgram = Os.Current.IsWindows ? ext == ".exe" : ext is "" or ".bin";
+            bool singleProgram = Os.Current.IsWindows ? ext == ".exe" : ext is "" or ".bin" or ".appimage";
             if (!singleProgram)
             {
                 AddError = "Launchers in shared folders like Downloads or Desktop can't be tracked. Move the app into its own folder first.";

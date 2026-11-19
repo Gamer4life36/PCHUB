@@ -3,8 +3,11 @@ using PcHub.Services;
 
 namespace PcHub.Platform;
 
-/// <summary>A process seen in one scan. CreateTime is a UTC FILETIME and, with Pid, identifies it uniquely.</summary>
-public sealed record ProcInfo(int Pid, int ParentPid, string Name, string? Path, long CreateTime);
+/// <summary>
+/// A process seen in one scan. CreateTime is a UTC FILETIME and, with Pid, identifies it uniquely.
+/// Cwd (Linux only) is the working folder of Python interpreters, which run from a shared system path.
+/// </summary>
+public sealed record ProcInfo(int Pid, int ParentPid, string Name, string? Path, long CreateTime, string? Cwd = null);
 
 /// <summary>One GPU reading. Optional fields are null when the platform can't read them.</summary>
 public sealed record GpuSample(
@@ -73,13 +76,14 @@ public interface IGpuMonitor : IDisposable
 }
 
 /// <summary>
-/// Everything that differs between Windows and macOS. The rest of PCHUB talks only to this.
+/// Everything that differs between Windows, macOS and Linux. The rest of PCHUB talks only to this.
 /// </summary>
 public interface IPlatform
 {
     string OsName { get; }
     bool IsWindows { get; }
     bool IsMac { get; }
+    bool IsLinux { get; }
 
     IGpuMonitor CreateGpuMonitor(AppSettings settings);
 
@@ -137,6 +141,7 @@ public static class Os
     {
         if (OperatingSystem.IsWindows()) return new Windows.WindowsPlatform();
         if (OperatingSystem.IsMacOS()) return new Mac.MacPlatform();
-        throw new PlatformNotSupportedException("PCHUB runs on Windows and macOS.");
+        if (OperatingSystem.IsLinux()) return new Linux.LinuxPlatform();
+        throw new PlatformNotSupportedException("PCHUB runs on Windows, macOS and Linux.");
     }
 }

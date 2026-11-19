@@ -4,7 +4,7 @@
         xmlns:vm="using:PcHub.ViewModels"
         xmlns:svc="using:PcHub.Services"
         x:Class="PcHub.MainWindow"
-        Title="PCHUB"
+        Title="PCHUB" Icon="avares://PCHUB/Assets/pchub.ico"
         Width="1240" Height="820" MinWidth="820" MinHeight="560"
         Background="{StaticResource Bg}" Foreground="{StaticResource Text}">
 
@@ -468,11 +468,11 @@
                                             IsVisible="{Binding SelectedTab.CanStartTool}" />
                                 </StackPanel>
                                 <StackPanel x:Name="RuntimeMissingPanel" IsVisible="False">
-                                    <TextBlock Text="Showing apps inside PCHUB needs Microsoft Edge WebView2" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" TextAlignment="Center" />
-                                    <TextBlock Classes="label" TextWrapping="Wrap" TextAlignment="Center" Margin="0,8,0,0"
+                                    <TextBlock x:Name="RuntimeTitle" Text="Showing apps inside PCHUB needs Microsoft Edge WebView2" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" TextAlignment="Center" />
+                                    <TextBlock x:Name="RuntimeText" Classes="label" TextWrapping="Wrap" TextAlignment="Center" Margin="0,8,0,0"
                                                Text="It comes with Windows 11 and most Windows 10 PCs, but isn't on this one. You can install it from Microsoft (free), or open this app in your browser instead." />
                                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,14,0,0" Spacing="8">
-                                        <Button Content="Get WebView2 from Microsoft" Click="GetWebView2_Click" />
+                                        <Button x:Name="RuntimeButton" Content="Get WebView2 from Microsoft" Click="GetWebView2_Click" />
                                         <Button Content="Open in browser" Command="{Binding OpenTabInBrowserCommand}" CommandParameter="{Binding SelectedTab}" />
                                     </StackPanel>
                                 </StackPanel>

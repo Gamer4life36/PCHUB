@@ -59,9 +59,24 @@ public sealed class WebHost
         get
         {
             if (_runtimeOk is true) return true;
-            _runtimeOk = !OperatingSystem.IsWindows() || WebView2Installed();
+            _runtimeOk = OperatingSystem.IsWindows() ? WebView2Installed() : !OperatingSystem.IsLinux() || WebKitGtkInstalled();
             return _runtimeOk.Value;
         }
+    }
+
+    /// <summary>Linux needs the WebKitGTK system library (libwebkit2gtk-4.1), which most desktops already have.</summary>
+    private static bool WebKitGtkInstalled()
+    {
+        foreach (string lib in new[] { "libwebkit2gtk-4.1.so.0", "libwebkit2gtk-4.0.so.37" })
+        {
+            if (System.Runtime.InteropServices.NativeLibrary.TryLoad(lib, out nint h))
+            {
+                System.Runtime.InteropServices.NativeLibrary.Free(h);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
